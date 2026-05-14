@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>德州扑克</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        body { font-family: sans-serif; max-width: 720px; margin: 20px auto; padding: 0 16px; background: #fafafa; }
+        h2 { text-align: center; }
+        .box { border: 1px solid #ddd; background: #fff; padding: 12px; margin-bottom: 12px; border-radius: 8px; }
+        input, button { padding: 6px 10px; margin: 2px; font-size: 14px; box-sizing: border-box; }
+        button { cursor: pointer; }
+        button:disabled { opacity: 0.35; cursor: not-allowed; }
+        #pot { font-size: 26px; text-align: center; font-weight: bold; color: #d9534f; margin: 6px 0; }
+        #phase { text-align: center; color: #888; font-size: 13px; }
+        #community { text-align: center; min-height: 40px; padding: 6px 0; }
+        .card {
+            display: inline-block; padding: 8px 10px; margin: 3px;
+            background: #fff; border: 1px solid #888; border-radius: 4px;
+            font-weight: bold; min-width: 28px; text-align: center; font-size: 16px;
+        }
+        .card.red { color: #d9534f; }
+        .card.black { color: #222; }
+        .player {
+            padding: 10px; margin: 6px 0; border: 1px solid #ccc;
+            border-radius: 6px; background: #f8f8f8; position: relative;
+        }
+        .player.acting {
+            border-color: #f0ad4e; background: #fff8e1;
+            box-shadow: 0 0 8px rgba(240,173,78,0.6);
+        }
+        .player.folded { opacity: 0.4; }
+        .player.me { border-left: 4px solid #5cb85c; }
+        .bet-chip {
+            display: inline-block; background: #f0ad4e; color: white;
+            padding: 2px 10px; border-radius: 12px; font-size: 13px; margin-left: 8px;
+        }
+        .action-btn {
+            background: #4CAF50; color: white; border: none;
+            border-radius: 4px; padding: 8px 14px; font-weight: bold;
+        }
+        .action-btn.fold { background: #d9534f; }
+        .action-btn.raise { background: #2196F3; }
+        #log { background: #f4f4f4; padding: 10px; height: 150px; overflow-y: auto;
+               border: 1px solid #ddd; font-size: 13px; }
+        #log p { margin: 3px 0; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+    <h2>🎰 德州扑克 (双人版)</h2>
+
+    <div class="box">
+        <input type="text"   id="roomInput"  placeholder="房间号" value="8888" style="width: 110px;">
+        <input type="number" id="buyInInput" placeholder="带入筹码" value="1000" min="100" style="width: 110px;">
+        <button onclick="joinRoom()">加入房间</button>
+        <button onclick="startDeal()" style="background:#4CAF50; color:white; border:none; border-radius:4px;">开始新一局</button>
+    </div>
+
+    <div class="box">
+        <div id="phase">阶段: --</div>
+        <div id="pot">💰 底池: 0</div>
+        <div id="community"><span style="color:#bbb;">（公共牌）</span></div>
+    </div>
+
+    <div class="box">
+        <div style="font-weight:bold; margin-bottom:6px;">玩家</div>
+        <div id="players"><span style="color:#bbb;">（无人在座）</span></div>
+    </div>
+
+    <div class="box">
+        <strong>你的底牌:</strong> <span id="myCards"><span style="color:#bbb;">（未发牌）</span></span>
+    </div>
+
+    <div class="box" id="actions">
+        <button class="action-btn fold"  id="btnFold"  onclick="act('fold')">弃牌 Fold</button>
+        <button class="action-btn"       id="btnCheck" onclick="act('check')">过牌 Check</button>
+        <button class="action-btn"       id="btnCall"  onclick="act('call')">跟注 Call</button>
+        <input  type="number" id="raiseAmount" placeholder="金额" style="width: 90px;">
+        <button class="action-btn raise" id="btnBet"   onclick="actBet()">下注 Bet</button>
+        <button class="action-btn raise" id="btnRaise" onclick="actRaise()">加注 Raise</button>
+    </div>
+
+    <div id="log"></div>
+
+    <script>
+        const socket = io();
+        let currentRoom = "";
+        let myHoleCards = [];
+        let myId = null;
+
+        socket.on('connect', () => { myId = socket.id; });
+
+        socket.on('server_msg', (msg) => {
+            const log = document.getElementById('log');
+            const p = document.createElement('p');
+            p.textContent = msg;
+            log.appendChild(p);
+            log.scrollTop = log.scrollHeight;
+        });
+
+        socket.on('hole_cards', (cards) => {
+            myHoleCards = cards;
+            renderMyCards();
+        });
+
+        socket.on('game_state', (state) => render(state));
+
+        function joinRoom() {
+            currentRoom = document.getElementById('roomInput').value;
+            const buyIn = parseInt(document.getElementById('buyInInput').value) || 1000;
+            if (currentRoom) {
+                socket.emit('join_room', { roomId: currentRoom, buyIn });
+            }
+        }
+
+        function startDeal() {
+            if (currentRoom) socket.emit('start_deal', currentRoom);
+        }
+
+        function act(action) {
+            if (currentRoom) socket.emit('player_action', { roomId: currentRoom, action });
+        }
+
+        function actBet() {
+            const amount = parseInt(document.getElementById('raiseAmount').value);
+            if (!amount) { alert('请输入下注金额'); return; }
+            socket.emit('player_action', { roomId: currentRoom, action: 'bet', amount });
+        }
+
+        function actRaise() {
+            const amount = parseInt(document.getElementById('raiseAmount').value);
+            if (!amount) { alert('请输入加注金额'); return; }
+            socket.emit('player_action', { roomId: currentRoom, action: 'raise', amount });
+        }
+
+        function formatCard(c) {
+            const sym = { Spades: '♠', Hearts: '♥', Diamonds: '♦', Clubs: '♣' }[c.suit] || '?';
+            const red = c.suit === 'Hearts' || c.suit === 'Diamonds';
+            return `<span class="card ${red ? 'red' : 'black'}">${sym}${c.rank}</span>`;
+        }
+
+        function renderMyCards() {
+            const el = document.getElementById('myCards');
+            el.innerHTML = myHoleCards.length
+                ? myHoleCards.map(formatCard).join('')
+                : '<span style="color:#bbb;">（未发牌）</span>';
+        }
+
+        function render(state) {
+            document.getElementById('phase').textContent = `阶段: ${state.phase}`;
+            document.getElementById('pot').textContent = `💰 底池: ${state.pot}`;
+            document.getElementById('community').innerHTML = state.communityCards.length
+                ? state.communityCards.map(formatCard).join('')
+                : '<span style="color:#bbb;">（公共牌）</span>';
+
+            const html = state.players.map(p => {
+                const isMe   = p.id === myId;
+                const isBtn  = p.id === state.buttonId;
+                const acting = p.id === state.actionOnId;
+                const cls    = ['player'];
+                if (isMe)    cls.push('me');
+                if (acting)  cls.push('acting');
+                if (p.folded) cls.push('folded');
+
+                const role = isBtn ? '🎯 庄家(SB)' : '🪑 大盲(BB)';
+                const tag  = isMe ? '👤 你' : `玩家 ${p.id.substring(0, 4)}`;
+                const status = p.folded ? '已弃牌' : (p.allIn ? 'All-in' : '');
+                const bet  = p.currentBet > 0 ? `<span class="bet-chip">本街下注 ${p.currentBet}</span>` : '';
+                const turn = acting ? '<span style="color:#f0ad4e; font-weight:bold;"> ← 行动中</span>' : '';
+
+                return `<div class="${cls.join(' ')}">
+                    <strong>${tag}</strong> · ${role} · 💵 ${p.chips}
+                    ${bet}
+                    ${status ? `<span style="color:#999;"> (${status})</span>` : ''}
+                    ${turn}
+                </div>`;
+            }).join('');
+            document.getElementById('players').innerHTML = html || '<span style="color:#bbb;">（无人在座）</span>';
+
+            // 按钮启用规则
+            const myTurn = state.actionOnId === myId;
+            const me     = state.players.find(p => p.id === myId);
+            const toCall = me ? state.currentBet - me.currentBet : 0;
+
+            document.getElementById('btnFold').disabled  = !myTurn;
+            document.getElementById('raiseAmount').disabled = !myTurn;
+            document.getElementById('btnCheck').disabled = !myTurn || toCall > 0;
+            document.getElementById('btnCall').disabled  = !myTurn || toCall <= 0;
+            document.getElementById('btnCall').textContent =
+                (myTurn && toCall > 0) ? `跟注 Call (${toCall})` : '跟注 Call';
+            // Bet 仅在本街无人下注时可用；Raise 仅在已有下注时可用
+            document.getElementById('btnBet').disabled   = !myTurn || state.currentBet > 0;
+            document.getElementById('btnRaise').disabled = !myTurn || state.currentBet === 0;
+        }
+
+        // 初始化按钮禁用
+        ['btnFold','btnCheck','btnCall','btnBet','btnRaise','raiseAmount'].forEach(id => {
+            document.getElementById(id).disabled = true;
+        });
+    </script>
+</body>
+</html>
