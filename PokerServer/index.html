@@ -1,83 +1,319 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>德州扑克</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>德州扑克 Heads-Up</title>
     <script src="/socket.io/socket.io.js"></script>
     <style>
-        body { font-family: sans-serif; max-width: 720px; margin: 20px auto; padding: 0 16px; background: #fafafa; }
-        h2 { text-align: center; }
-        .box { border: 1px solid #ddd; background: #fff; padding: 12px; margin-bottom: 12px; border-radius: 8px; }
-        input, button { padding: 6px 10px; margin: 2px; font-size: 14px; box-sizing: border-box; }
-        button { cursor: pointer; }
-        button:disabled { opacity: 0.35; cursor: not-allowed; }
-        #pot { font-size: 26px; text-align: center; font-weight: bold; color: #d9534f; margin: 6px 0; }
-        #phase { text-align: center; color: #888; font-size: 13px; }
-        #community { text-align: center; min-height: 40px; padding: 6px 0; }
-        .card {
-            display: inline-block; padding: 8px 10px; margin: 3px;
-            background: #fff; border: 1px solid #888; border-radius: 4px;
-            font-weight: bold; min-width: 28px; text-align: center; font-size: 16px;
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+            background: linear-gradient(180deg, #0d1b2a, #1b263b);
+            color: #e8e8e8;
+            min-height: 100vh;
+            padding: 12px;
+            max-width: 720px;
+            margin: 0 auto;
         }
-        .card.red { color: #d9534f; }
-        .card.black { color: #222; }
-        .player {
-            padding: 10px; margin: 6px 0; border: 1px solid #ccc;
-            border-radius: 6px; background: #f8f8f8; position: relative;
+        h1 {
+            text-align: center;
+            font-size: 22px;
+            margin-bottom: 10px;
+            color: #f4d35e;
+            letter-spacing: 1px;
         }
-        .player.acting {
-            border-color: #f0ad4e; background: #fff8e1;
-            box-shadow: 0 0 8px rgba(240,173,78,0.6);
+
+        /* ===== Lobby ===== */
+        #lobby {
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 10px;
+            padding: 12px;
+            margin-bottom: 12px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            justify-content: center;
+            align-items: center;
         }
-        .player.folded { opacity: 0.4; }
-        .player.me { border-left: 4px solid #5cb85c; }
+        #lobby input {
+            background: rgba(255, 255, 255, 0.08);
+            color: #fff;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 5px;
+            padding: 7px 10px;
+            font-size: 14px;
+            width: 130px;
+        }
+        #lobby button {
+            background: #3a86ff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            padding: 8px 16px;
+            font-weight: bold;
+            font-size: 14px;
+            cursor: pointer;
+            transition: filter 0.15s;
+        }
+        #lobby button.start { background: #06d6a0; color: #0a1f1a; }
+        #lobby button:hover { filter: brightness(1.15); }
+
+        /* ===== Table ===== */
+        #table-area {
+            background: radial-gradient(ellipse at center, #2d6a4f 0%, #1b4332 75%);
+            border: 8px solid #5d3a1a;
+            border-radius: 24px;
+            padding: 28px 16px 20px;
+            box-shadow:
+                0 8px 30px rgba(0, 0, 0, 0.5),
+                inset 0 0 50px rgba(0, 0, 0, 0.35);
+            margin-bottom: 12px;
+            position: relative;
+            min-height: 480px;
+        }
+        #phase-indicator {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.5);
+            padding: 4px 14px;
+            border-radius: 12px;
+            font-size: 12px;
+            color: #ddd;
+            letter-spacing: 1px;
+        }
+
+        /* ===== Seat ===== */
+        .seats-row {
+            display: flex;
+            justify-content: center;
+            margin: 8px 0;
+        }
+        .seat {
+            background: rgba(0, 0, 0, 0.35);
+            border-radius: 12px;
+            padding: 10px 14px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            border: 2px solid transparent;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            min-width: 220px;
+            min-height: 150px;
+            position: relative;
+        }
+        .seat.acting {
+            border-color: #f4d35e;
+            box-shadow: 0 0 18px rgba(244, 211, 94, 0.5);
+        }
+        .seat.folded { opacity: 0.45; }
+        .seat .name { font-weight: bold; font-size: 14px; }
+        .seat .info { font-size: 11px; color: #b0c9b8; }
+        .seat .chips { font-size: 16px; color: #f4d35e; font-weight: bold; }
+        .seat .status {
+            font-size: 11px;
+            color: #ff9f1c;
+            background: rgba(255, 159, 28, 0.12);
+            padding: 1px 8px;
+            border-radius: 8px;
+        }
         .bet-chip {
-            display: inline-block; background: #f0ad4e; color: white;
-            padding: 2px 10px; border-radius: 12px; font-size: 13px; margin-left: 8px;
+            position: absolute;
+            top: -10px;
+            right: -10px;
+            background: linear-gradient(135deg, #f4d35e, #ee9b00);
+            color: #1a1a1a;
+            padding: 4px 10px;
+            border-radius: 14px;
+            font-weight: bold;
+            font-size: 12px;
+            box-shadow: 0 3px 6px rgba(0, 0, 0, 0.4);
+            border: 2px solid #fff8e0;
+        }
+        .cards-area {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 4px;
+        }
+
+        /* ===== Card ===== */
+        .card {
+            display: inline-flex;
+            flex-direction: column;
+            justify-content: space-between;
+            width: 46px;
+            height: 64px;
+            border-radius: 6px;
+            background: #fff;
+            border: 1px solid #ddd;
+            padding: 4px 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.35);
+            font-weight: bold;
+            user-select: none;
+        }
+        .card.red { color: #d62828; }
+        .card.black { color: #1a1a1a; }
+        .card.back {
+            background:
+                repeating-linear-gradient(45deg,
+                    #1e3a5f 0, #1e3a5f 5px,
+                    #2c5aa0 5px, #2c5aa0 10px);
+            border-color: #1e3a5f;
+        }
+        .card .rank { font-size: 15px; line-height: 1; }
+        .card .suit { font-size: 22px; align-self: center; line-height: 1; }
+        .empty-slot {
+            width: 46px;
+            height: 64px;
+            border: 2px dashed rgba(255, 255, 255, 0.12);
+            border-radius: 6px;
+        }
+
+        /* ===== Table center ===== */
+        .table-center {
+            text-align: center;
+            margin: 22px 0;
+        }
+        #pot {
+            font-size: 22px;
+            font-weight: bold;
+            color: #f4d35e;
+            margin-bottom: 12px;
+            text-shadow: 0 2px 5px rgba(0, 0, 0, 0.6);
+        }
+        #community {
+            display: flex;
+            justify-content: center;
+            gap: 4px;
+            min-height: 64px;
+        }
+
+        /* ===== Action bar ===== */
+        #action-bar {
+            display: flex;
+            gap: 8px;
+            justify-content: center;
+            flex-wrap: wrap;
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 10px;
+            margin-bottom: 12px;
+            align-items: center;
         }
         .action-btn {
-            background: #4CAF50; color: white; border: none;
-            border-radius: 4px; padding: 8px 14px; font-weight: bold;
+            padding: 10px 16px;
+            border: none;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 14px;
+            cursor: pointer;
+            color: white;
+            transition: filter 0.15s, transform 0.15s;
+            min-width: 72px;
         }
-        .action-btn.fold { background: #d9534f; }
-        .action-btn.raise { background: #2196F3; }
-        #log { background: #f4f4f4; padding: 10px; height: 150px; overflow-y: auto;
-               border: 1px solid #ddd; font-size: 13px; }
-        #log p { margin: 3px 0; white-space: pre-wrap; }
+        .action-btn:hover:not(:disabled) {
+            filter: brightness(1.18);
+            transform: translateY(-1px);
+        }
+        .action-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+        .action-btn.fold { background: #d62828; }
+        .action-btn.check { background: #5a7fa3; }
+        .action-btn.call { background: #3a86ff; }
+        .action-btn.bet, .action-btn.raise {
+            background: #06d6a0;
+            color: #0a1f1a;
+        }
+        #raiseAmount {
+            background: rgba(255, 255, 255, 0.08);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 5px;
+            padding: 9px 10px;
+            width: 100px;
+            font-size: 14px;
+        }
+        #raiseAmount:disabled { opacity: 0.3; }
+
+        /* ===== Log ===== */
+        #log {
+            background: rgba(0, 0, 0, 0.35);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 6px;
+            padding: 10px 12px;
+            height: 140px;
+            overflow-y: auto;
+            font-size: 12px;
+            color: #b8c5d0;
+            line-height: 1.6;
+        }
+        #log p { padding: 1px 0; white-space: pre-wrap; }
+
+        /* ===== Mobile ===== */
+        @media (max-width: 600px) {
+            body { padding: 8px; }
+            h1 { font-size: 18px; }
+            #lobby input { width: 100px; font-size: 13px; }
+            #lobby button { padding: 7px 12px; font-size: 13px; }
+            .seat { min-width: 170px; min-height: 130px; padding: 8px 10px; }
+            .seat .name { font-size: 13px; }
+            .card, .empty-slot { width: 38px; height: 54px; }
+            .card .rank { font-size: 13px; }
+            .card .suit { font-size: 18px; }
+            #pot { font-size: 18px; }
+            .action-btn { padding: 8px 12px; font-size: 13px; min-width: 60px; }
+            #raiseAmount { width: 80px; padding: 7px; }
+            #log { height: 110px; font-size: 11px; }
+        }
     </style>
 </head>
 <body>
-    <h2>🎰 德州扑克 (双人版)</h2>
+    <h1>🎰 德州扑克 Heads-Up</h1>
 
-    <div class="box">
-        <input type="text"   id="roomInput"  placeholder="房间号" value="8888" style="width: 110px;">
-        <input type="number" id="buyInInput" placeholder="带入筹码" value="1000" min="100" style="width: 110px;">
+    <div id="lobby">
+        <input type="text" id="roomInput" placeholder="房间号" value="8888">
+        <input type="number" id="buyInInput" placeholder="带入筹码" value="1000" min="100">
         <button onclick="joinRoom()">加入房间</button>
-        <button onclick="startDeal()" style="background:#4CAF50; color:white; border:none; border-radius:4px;">开始新一局</button>
+        <button class="start" onclick="startDeal()">开始新一局</button>
     </div>
 
-    <div class="box">
-        <div id="phase">阶段: --</div>
-        <div id="pot">💰 底池: 0</div>
-        <div id="community"><span style="color:#bbb;">（公共牌）</span></div>
+    <div id="table-area">
+        <div id="phase-indicator">阶段: 等待加入</div>
+
+        <div class="seats-row">
+            <div class="seat" id="seatOpponent">
+                <div class="cards-area"></div>
+                <div class="name">等待对手...</div>
+            </div>
+        </div>
+
+        <div class="table-center">
+            <div id="pot">💰 底池: 0</div>
+            <div id="community"></div>
+        </div>
+
+        <div class="seats-row">
+            <div class="seat" id="seatMe">
+                <div class="cards-area"></div>
+                <div class="name">未加入</div>
+            </div>
+        </div>
     </div>
 
-    <div class="box">
-        <div style="font-weight:bold; margin-bottom:6px;">玩家</div>
-        <div id="players"><span style="color:#bbb;">（无人在座）</span></div>
-    </div>
-
-    <div class="box">
-        <strong>你的底牌:</strong> <span id="myCards"><span style="color:#bbb;">（未发牌）</span></span>
-    </div>
-
-    <div class="box" id="actions">
-        <button class="action-btn fold"  id="btnFold"  onclick="act('fold')">弃牌 Fold</button>
-        <button class="action-btn"       id="btnCheck" onclick="act('check')">过牌 Check</button>
-        <button class="action-btn"       id="btnCall"  onclick="act('call')">跟注 Call</button>
-        <input  type="number" id="raiseAmount" placeholder="金额" style="width: 90px;">
-        <button class="action-btn raise" id="btnBet"   onclick="actBet()">下注 Bet</button>
-        <button class="action-btn raise" id="btnRaise" onclick="actRaise()">加注 Raise</button>
+    <div id="action-bar">
+        <button class="action-btn fold"  id="btnFold"  onclick="act('fold')"   disabled>弃牌</button>
+        <button class="action-btn check" id="btnCheck" onclick="act('check')"  disabled>过牌</button>
+        <button class="action-btn call"  id="btnCall"  onclick="act('call')"   disabled>跟注</button>
+        <input  type="number" id="raiseAmount" placeholder="金额" disabled>
+        <button class="action-btn bet"   id="btnBet"   onclick="actBet()"      disabled>下注</button>
+        <button class="action-btn raise" id="btnRaise" onclick="actRaise()"    disabled>加注</button>
     </div>
 
     <div id="log"></div>
@@ -100,13 +336,12 @@
 
         socket.on('hole_cards', (cards) => {
             myHoleCards = cards;
-            renderMyCards();
         });
 
         socket.on('game_state', (state) => render(state));
 
         function joinRoom() {
-            currentRoom = document.getElementById('roomInput').value;
+            currentRoom = document.getElementById('roomInput').value.trim();
             const buyIn = parseInt(document.getElementById('buyInInput').value) || 1000;
             if (currentRoom) {
                 socket.emit('join_room', { roomId: currentRoom, buyIn });
@@ -133,70 +368,112 @@
             socket.emit('player_action', { roomId: currentRoom, action: 'raise', amount });
         }
 
-        function formatCard(c) {
+        function cardHtml(c) {
             const sym = { Spades: '♠', Hearts: '♥', Diamonds: '♦', Clubs: '♣' }[c.suit] || '?';
             const red = c.suit === 'Hearts' || c.suit === 'Diamonds';
-            return `<span class="card ${red ? 'red' : 'black'}">${sym}${c.rank}</span>`;
+            return `<div class="card ${red ? 'red' : 'black'}">
+                        <span class="rank">${c.rank}</span>
+                        <span class="suit">${sym}</span>
+                    </div>`;
+        }
+        function cardBackHtml() {
+            return `<div class="card back"></div>`;
+        }
+        function emptySlotHtml() {
+            return `<div class="empty-slot"></div>`;
         }
 
-        function renderMyCards() {
-            const el = document.getElementById('myCards');
-            el.innerHTML = myHoleCards.length
-                ? myHoleCards.map(formatCard).join('')
-                : '<span style="color:#bbb;">（未发牌）</span>';
+        function renderSeat(elId, player, state, isMe) {
+            const el = document.getElementById(elId);
+            if (!player) {
+                el.className = 'seat';
+                el.innerHTML = `
+                    <div class="cards-area">${emptySlotHtml()}${emptySlotHtml()}</div>
+                    <div class="name">等待对手加入...</div>
+                `;
+                return;
+            }
+            const isBtn = player.id === state.buttonId;
+            const acting = player.id === state.actionOnId;
+            const handInProgress = state.phase !== 'waiting' && state.phase !== 'showdown';
+
+            const cls = ['seat'];
+            if (acting) cls.push('acting');
+            if (player.folded) cls.push('folded');
+            el.className = cls.join(' ');
+
+            let cardsHtml;
+            if (isMe) {
+                cardsHtml = myHoleCards.length
+                    ? myHoleCards.map(cardHtml).join('')
+                    : emptySlotHtml() + emptySlotHtml();
+            } else {
+                if (handInProgress && !player.folded) {
+                    cardsHtml = cardBackHtml() + cardBackHtml();
+                } else {
+                    cardsHtml = emptySlotHtml() + emptySlotHtml();
+                }
+            }
+
+            const name = isMe ? '👤 你' : `🪑 玩家 ${player.id.substring(0, 4)}`;
+            const role = isBtn ? '🎯 庄家 (SB)' : '大盲 (BB)';
+            const statusHtml = player.folded
+                ? '<div class="status">已弃牌</div>'
+                : (player.allIn ? '<div class="status">All-in</div>' : '');
+            const betHtml = player.currentBet > 0
+                ? `<div class="bet-chip">💵 ${player.currentBet}</div>` : '';
+
+            el.innerHTML = `
+                <div class="cards-area">${cardsHtml}</div>
+                <div class="name">${name}</div>
+                <div class="info">${role}</div>
+                <div class="chips">💵 ${player.chips}</div>
+                ${statusHtml}
+                ${betHtml}
+            `;
         }
 
         function render(state) {
-            document.getElementById('phase').textContent = `阶段: ${state.phase}`;
+            const phaseMap = {
+                waiting: '等待开始',
+                preflop: 'Preflop',
+                flop: 'Flop',
+                turn: 'Turn',
+                river: 'River',
+                showdown: 'Showdown'
+            };
+            document.getElementById('phase-indicator').textContent =
+                `阶段: ${phaseMap[state.phase] || state.phase}`;
             document.getElementById('pot').textContent = `💰 底池: ${state.pot}`;
-            document.getElementById('community').innerHTML = state.communityCards.length
-                ? state.communityCards.map(formatCard).join('')
-                : '<span style="color:#bbb;">（公共牌）</span>';
 
-            const html = state.players.map(p => {
-                const isMe   = p.id === myId;
-                const isBtn  = p.id === state.buttonId;
-                const acting = p.id === state.actionOnId;
-                const cls    = ['player'];
-                if (isMe)    cls.push('me');
-                if (acting)  cls.push('acting');
-                if (p.folded) cls.push('folded');
+            // Community cards: 5 slots, fill from communityCards or empty
+            const commEl = document.getElementById('community');
+            const slots = [];
+            for (let i = 0; i < 5; i++) {
+                slots.push(i < state.communityCards.length
+                    ? cardHtml(state.communityCards[i])
+                    : emptySlotHtml());
+            }
+            commEl.innerHTML = slots.join('');
 
-                const role = isBtn ? '🎯 庄家(SB)' : '🪑 大盲(BB)';
-                const tag  = isMe ? '👤 你' : `玩家 ${p.id.substring(0, 4)}`;
-                const status = p.folded ? '已弃牌' : (p.allIn ? 'All-in' : '');
-                const bet  = p.currentBet > 0 ? `<span class="bet-chip">本街下注 ${p.currentBet}</span>` : '';
-                const turn = acting ? '<span style="color:#f0ad4e; font-weight:bold;"> ← 行动中</span>' : '';
+            // Seats
+            const me  = state.players.find(p => p.id === myId);
+            const opp = state.players.find(p => p.id !== myId);
+            renderSeat('seatMe', me, state, true);
+            renderSeat('seatOpponent', opp, state, false);
 
-                return `<div class="${cls.join(' ')}">
-                    <strong>${tag}</strong> · ${role} · 💵 ${p.chips}
-                    ${bet}
-                    ${status ? `<span style="color:#999;"> (${status})</span>` : ''}
-                    ${turn}
-                </div>`;
-            }).join('');
-            document.getElementById('players').innerHTML = html || '<span style="color:#bbb;">（无人在座）</span>';
-
-            // 按钮启用规则
+            // Action bar
             const myTurn = state.actionOnId === myId;
-            const me     = state.players.find(p => p.id === myId);
             const toCall = me ? state.currentBet - me.currentBet : 0;
-
             document.getElementById('btnFold').disabled  = !myTurn;
             document.getElementById('raiseAmount').disabled = !myTurn;
             document.getElementById('btnCheck').disabled = !myTurn || toCall > 0;
             document.getElementById('btnCall').disabled  = !myTurn || toCall <= 0;
             document.getElementById('btnCall').textContent =
-                (myTurn && toCall > 0) ? `跟注 Call (${toCall})` : '跟注 Call';
-            // Bet 仅在本街无人下注时可用；Raise 仅在已有下注时可用
+                (myTurn && toCall > 0) ? `跟注 ${toCall}` : '跟注';
             document.getElementById('btnBet').disabled   = !myTurn || state.currentBet > 0;
             document.getElementById('btnRaise').disabled = !myTurn || state.currentBet === 0;
         }
-
-        // 初始化按钮禁用
-        ['btnFold','btnCheck','btnCall','btnBet','btnRaise','raiseAmount'].forEach(id => {
-            document.getElementById(id).disabled = true;
-        });
     </script>
 </body>
 </html>
