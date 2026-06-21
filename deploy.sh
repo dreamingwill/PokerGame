@@ -8,10 +8,10 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SERVER_HOST="Shenzhen"
+SERVER_HOST="Hongkong"                       # 生产服务器（阿里云香港，替代卡顿的深圳）
 SERVER_PATH="/root/PokerGame/PokerServer"
 PM2_APP="poker"
-PUBLIC_URL="http://47.112.8.25:3000"
+PUBLIC_URL="http://47.76.61.168:3000"
 
 # Step 1: Git 提交（如果提供了 commit message）
 if [ -n "$1" ]; then
@@ -43,7 +43,7 @@ ssh "$SERVER_HOST" "cd $SERVER_PATH && npm install --omit=dev"
 
 echo ""
 echo "🔄 重启 pm2 进程..."
-ssh "$SERVER_HOST" "pm2 restart $PM2_APP"
+ssh "$SERVER_HOST" "cd $SERVER_PATH && pm2 restart $PM2_APP --update-env || pm2 start server.js --name $PM2_APP"
 
 echo ""
 echo "✅ 部署完成 → $PUBLIC_URL"
