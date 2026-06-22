@@ -3,6 +3,9 @@ const http = require('http');
 const { Server } = require('socket.io');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const { Deck, HandEvaluator } = require('./PokerLogic');
 const db = require('./database');
 
@@ -24,7 +27,22 @@ const PHASES = {
 
 const DEFAULT_SMALL_BLIND = 10;
 const DEFAULT_BIG_BLIND   = 20;
-const JWT_SECRET  = process.env.JWT_SECRET || 'poker-dev-secret-change-in-prod';
+// JWT 私章：优先环境变量；否则用本地 secret.key（不进 git、部署不覆盖，像 data.json）；
+// 首次缺失则自动生成强随机密钥并落盘。绝不使用写死在代码里的默认值（公开仓库可见 → 可伪造令牌）
+const JWT_SECRET = (() => {
+    if (process.env.JWT_SECRET && process.env.JWT_SECRET.length >= 16) return process.env.JWT_SECRET;
+    const keyPath = path.join(__dirname, 'secret.key');
+    try {
+        if (fs.existsSync(keyPath)) {
+            const k = fs.readFileSync(keyPath, 'utf8').trim();
+            if (k.length >= 16) return k;
+        }
+    } catch {}
+    const k = crypto.randomBytes(48).toString('hex');   // 96 位十六进制强随机
+    try { fs.writeFileSync(keyPath, k, { mode: 0o600 }); console.log('🔐 已生成新的 JWT 私章 secret.key（旧登录令牌将失效，需重新登录一次）'); }
+    catch (e) { console.error('⚠️ 无法写入 secret.key，本次用内存随机密钥（重启会掉登录）：', e.message); }
+    return k;
+})();
 
 // 标准 SNG 升盲表（级别 0 起，初始 25/50；SB=BB/2，每级 BB ×1.3~1.5 取整，行业标准结构）
 const STANDARD_BLIND_LEVELS = [
@@ -131,6 +149,15 @@ app.get('/api/my-hands', requireAuth, (req, res) => {
     res.json(db.getHandsForUser(req.authUser.id, { limit, mode }));
 });
 
+// 我的站内消息（收件箱）：比赛结束排名等
+app.get('/api/my-messages', requireAuth, (req, res) => {
+    res.json(db.getMessages(req.authUser.id));
+});
+app.post('/api/messages/read', requireAuth, (req, res) => {
+    db.markMessagesRead(req.authUser.id);
+    res.json({ ok: true });
+});
+
 // ===== Auth routes =====
 
 app.post('/api/register', async (req, res) => {
@@ -227,6 +254,32 @@ function buildSidePots(game) {
     return pots;
 }
 
+// 实时分池：仅当「某未弃牌玩家 all-in 且投入 < 其他未弃牌玩家」才分主/边池；
+// 否则（只是有人还没跟注/加注）视为单一底池——避免行动未完成时误显边池
+function livePots(game) {
+    const contribs = game.players
+        .map(p => ({ amt: (p.committed || 0) + (p.currentBet || 0), folded: p.folded, allIn: !!p.allIn }))
+        .filter(c => c.amt > 0);
+    if (!contribs.length) return [];
+    const maxLive = Math.max(0, ...contribs.filter(c => !c.folded).map(c => c.amt));
+    const hasAllInSide = contribs.some(c => !c.folded && c.allIn && c.amt < maxLive);
+    if (!hasAllInSide) {
+        const total = contribs.reduce((s, c) => s + c.amt, 0);
+        return [{ amount: total, eligibleCount: contribs.filter(c => !c.folded).length }];
+    }
+    // 确有 all-in 边池：按档位分层
+    const pots = [];
+    let remaining = contribs.slice();
+    while (remaining.length > 0) {
+        const minAmt = Math.min(...remaining.map(c => c.amt));
+        let amount = 0, eligibleCount = 0;
+        for (const c of remaining) { amount += minAmt; c.amt -= minAmt; if (!c.folded) eligibleCount++; }
+        pots.push({ amount, eligibleCount });
+        remaining = remaining.filter(c => c.amt > 0);
+    }
+    return pots;
+}
+
 function broadcastState(roomId) {
     const game = roomGames[roomId];
     if (!game) return;
@@ -244,7 +297,10 @@ function broadcastState(roomId) {
         roomType:   game.roomType || 'cash',
         roomName:   game.config?.name || roomId,
         maxPlayers: game.config?.maxPlayers || 9,
+        sidePots:   livePots(game),
         spectators: listSpectators(roomId),
+        statsHistory: game.statsHistory || [],       // 已离开/淘汰玩家（战绩面板灰显）
+        tableEndAt: game.tableEndAt || null,         // 现金桌训练结束时间戳
         ownerUserId:    game.ownerUserId || null,
         status:         game.status || 'waiting',
         currentLevel:   game.currentLevel || 0,
@@ -271,6 +327,7 @@ function broadcastState(roomId) {
             away:       !!p.away,
             sittingOut: !!p.sittingOut,            // 现金桌坐出（等补码）
             reserved:   !!p.reserved,              // 留座离座中
+            standing:   !!p.standing,              // 站起围观中（筹码保留，结束时结算）
             reserveLeaveAt: p.reserveLeaveAt || null,
             pendingRebuy: p.pendingRebuy || 0,     // 下一手生效的补码
             autoRebuy:  !!p.autoRebuy,             // 现金桌自动补码
@@ -483,7 +540,8 @@ function doShowdown(roomId) {
     // 真边池：逐池在「有资格的玩家」中取最强手分配；平局均分，余数给第一位
     const pots = buildSidePots(game);
     const winShare = {};   // userId -> 赢得总额
-    pots.forEach(pot => {
+    const potResults = []; // 逐池结果（主池在前，边池在后），供客户端依次飞币动画
+    pots.forEach((pot, idx) => {
         if (!pot.eligible.length) return;
         const best = Math.min(...pot.eligible.map(p => scoreOf[p.userId]));
         const winners = pot.eligible.filter(p => scoreOf[p.userId] === best);
@@ -493,6 +551,11 @@ function doShowdown(roomId) {
             const amt = split + (i === 0 ? rem : 0);
             w.chips += amt;
             winShare[w.userId] = (winShare[w.userId] || 0) + amt;
+        });
+        potResults.push({
+            amount: pot.amount, main: idx === 0,
+            label: idx === 0 ? '主池' : `边池${idx}`,
+            winners: winners.map(w => ({ userId: w.userId, amount: split + 0 }))
         });
     });
 
@@ -507,7 +570,8 @@ function doShowdown(roomId) {
         category = wb.category;
     }
     io.in(roomId).emit('showdown_reveal', {
-        reveals, winners: winnerIds, winnerId: overallId, bestCommunity, bestHole, category
+        reveals, winners: winnerIds, winnerId: overallId, bestCommunity, bestHole, category,
+        pots: potResults
     });
     const label = winnerIds.map(id => {
         const p = game.players.find(x => x.userId === id);
@@ -563,10 +627,11 @@ function startHand(roomId) {
     clearTimeout(game.nextHandTimer);
     clearTimeout(game.runoutTimer);
     game.rabbitStreets = 0;   // 重置「看后续牌」状态
-    // 第一手开始：标记 running；SNG 额外启动升盲计时
+    // 第一手开始：标记 running；SNG 启动升盲计时；现金桌启动训练时长倒计时
     if (game.status !== 'running') {
         game.status = 'running';
         if (game.roomType === 'sng') { game.levelStartTime = Date.now(); startLevelTimer(roomId); }
+        if (game.roomType === 'cash') startTableTimer(roomId);
         broadcastRoomList();
     }
     // 按座位号排序数组（开局前安全：数组顺序=环桌顺序，决定行动/盲注方向）
@@ -580,6 +645,7 @@ function startHand(roomId) {
     game.buttonIdx = game.players.findIndex(p => p.seat === bseat);
 
     game.deck.reset(); game.deck.shuffle();
+    console.log(`[deal] 房间 ${roomId} 新一手已重新洗牌（crypto） shuffleId=${game.deck.lastShuffleId}`);
     game.holeCards = {}; game.communityCards = [];
     game.shownCards = {};   // 本局主动亮牌记录（userId -> Set(牌索引)）
     game.allinRevealed = false;   // 全押亮牌标志
@@ -790,8 +856,88 @@ function maybeEndSNG(roomId) {
             io.in(roomId).emit('server_msg', `🏆🏆 ${winner.username} 夺冠！奖池 ${prize} 金币`);
             io.in(roomId).emit('tournament_over', { winner: winner.username, prize });
         }
+        // 公布按名次排名（冠军→淘汰倒序）+ 给每位玩家（含已淘汰离开者）发消息
+        sendMatchResult(roomId, `【${game.config.name}】比赛结束`, buildRanking(game, winner && winner.userId, sngPrize(game.prizePool)));
         broadcastRoomList();
     }
+}
+
+// 记录离开/淘汰玩家的最终战绩（供战绩面板灰显 + 结束排名）
+function recordLeft(game, p) {
+    if (!game.statsHistory) game.statsHistory = [];
+    const net = (p.chips || 0) - (p.buyIn || 0);
+    const ex = game.statsHistory.find(h => h.userId === p.userId);
+    if (ex) { ex.net = net; ex.handsPlayed = p.handsPlayed || 0; ex.buyIn = p.buyIn || 0; }
+    else game.statsHistory.push({ userId: p.userId, username: p.username, buyIn: p.buyIn || 0, handsPlayed: p.handsPlayed || 0, net, left: true });
+}
+
+// 构建结束排名：现金=按盈亏(筹码)；SNG=冠军→淘汰倒序(盈亏金币)
+function buildRanking(game, winnerId, prize) {
+    if (game.roomType === 'cash') {
+        const cur = game.players.map(p => ({ userId: p.userId, username: p.username, net: (p.chips || 0) - (p.buyIn || 0) }));
+        const hist = (game.statsHistory || []).filter(h => !game.players.some(p => p.userId === h.userId))
+            .map(h => ({ userId: h.userId, username: h.username, net: h.net }));
+        return [...cur, ...hist].sort((a, b) => b.net - a.net)
+            .map((r, i) => ({ rank: i + 1, userId: r.userId, username: r.username, net: r.net, unit: '筹码' }));
+    }
+    const fee = game.config.buyIn || 0;
+    const order = [];
+    const w = game.players.find(p => p.userId === winnerId);
+    if (w) order.push({ userId: w.userId, username: w.username, net: (prize || 0) - fee });
+    (game.statsHistory || []).slice().reverse().forEach(h => order.push({ userId: h.userId, username: h.username, net: -fee }));
+    return order.map((r, i) => ({ rank: i + 1, userId: r.userId, username: r.username, net: r.net, unit: '金币' }));
+}
+
+// 公布排名：在线玩家弹结算面板；所有参与者（含离线/已离开）进收件箱
+function sendMatchResult(roomId, title, ranking) {
+    if (!ranking || !ranking.length) return;
+    io.in(roomId).emit('match_result', { title, ranking });
+    ranking.forEach(r => {
+        const sign = r.net >= 0 ? '+' : '';
+        const line = ranking.map(x => `${x.rank}. ${x.username} ${x.net >= 0 ? '+' : ''}${x.net}`).join('\n');
+        db.addMessage(r.userId, { type: 'result', text: `${title}\n你第 ${r.rank}/${ranking.length} 名，盈亏 ${sign}${r.net} ${r.unit}\n\n排名：\n${line}` });
+    });
+}
+
+// 现金桌训练时长倒计时：到点自动结束并结算排名
+function startTableTimer(roomId) {
+    const game = roomGames[roomId];
+    if (!game || game.roomType !== 'cash') return;
+    const ms = Math.round((game.config.durationH || 2) * 3600 * 1000) + (game.extraMs || 0);
+    game.tableEndAt = Date.now() + ms;
+    clearTimeout(game.tableTimer);
+    game.tableTimer = setTimeout(() => endCashTable(roomId, '训练时长已到'), ms);
+}
+function extendTable(roomId, addMs) {
+    const game = roomGames[roomId];
+    if (!game || game.roomType !== 'cash') return;
+    game.extraMs = (game.extraMs || 0) + addMs;
+    if (game.tableEndAt) {
+        game.tableEndAt += addMs;
+        clearTimeout(game.tableTimer);
+        game.tableTimer = setTimeout(() => endCashTable(roomId, '训练时长已到'), Math.max(0, game.tableEndAt - Date.now()));
+    }
+}
+
+// 结束现金桌：结算所有在座筹码→金币，公布排名+发消息，全员（含观众）回大厅
+function endCashTable(roomId, reason) {
+    const game = roomGames[roomId];
+    if (!game || game.tournamentOver) return;
+    game.tournamentOver = true; game.status = 'finished';
+    clearTimeout(game.tableTimer); clearTimeout(game.nextHandTimer); clearTimeout(game.runoutTimer); clearActionTimer(game);
+    for (const p of game.players) if (p.reserveTimer) clearTimeout(p.reserveTimer);
+    const ranking = buildRanking(game);
+    game.players.forEach(p => cashOut(p));   // 结算筹码→金币
+    if (ranking.length) sendMatchResult(roomId, `【${game.config.name}】${reason || '比赛结束'}`, ranking);
+    else io.in(roomId).emit('room_dissolved');   // 空桌（如刚创建即解散）：直接回大厅
+    // 把房间内所有 socket（在座玩家 + 观众）踢回大厅
+    const room = io.sockets.adapter.rooms.get(roomId);
+    if (room) for (const sid of [...room]) {
+        const s = io.sockets.sockets.get(sid);
+        if (s) { s.leave(roomId); s.currentRoom = null; lobbySockets.add(s.id); if (s.user) s.emit('room_list', listRooms(s.user.id)); }
+    }
+    delete roomGames[roomId];
+    broadcastRoomList();
 }
 
 // 一局结束后自动开下一局（SNG/现金桌进行中，无需重新准备）
@@ -850,6 +996,7 @@ function removeBustedPlayers(game) {
             // 有挂起补码：下一手生效（加筹码，取消坐出）
             if (p.pendingRebuy > 0) { p.chips += p.pendingRebuy; p.pendingRebuy = 0; p.sittingOut = false; }
             if (p.leaving) {
+                recordLeft(game, p);   // 战绩面板灰显 + 结束排名
                 const payout = cashOut(p);
                 io.in(roomId).emit('server_msg', `🚪 ${p.username} 离场，兑出 ${payout} 金币`);
                 const s = io.sockets.sockets.get(p.socketId);
@@ -862,6 +1009,7 @@ function removeBustedPlayers(game) {
             }
         } else {
             if (p.chips <= 0) {
+                recordLeft(game, p);   // SNG 淘汰顺序（用于结束排名：先淘汰=末名）
                 io.in(roomId).emit('server_msg', `💀 ${p.username} 出局`);
                 const s = io.sockets.sockets.get(p.socketId);
                 if (s && s.currentRoom === roomId) { s.leave(roomId); s.currentRoom = null; lobbySockets.add(s.id); s.emit('busted_out'); }
@@ -927,7 +1075,7 @@ function seatPlayer(roomId, socket, user, buyInChips, seat) {
     const newP = {
         userId: user.id, socketId: socket.id, username: user.username, seat,
         avatar: db.getUserById(user.id)?.avatar || null,
-        chips, currentBet: 0,
+        chips, currentBet: 0, buyIn: chips,   // 入座即记录带入额（战绩 net=chips-buyIn=0，避免首次广播显示 +chips）
         folded: inHand, allIn: false, hasActed: false, ready: false   // 中途加入则本局坐出（下一局开局重置）
     };
     // 牌局进行中：追加到末尾（避免打乱在用的数组索引），坐出本手；局间则按座位插入
@@ -1012,7 +1160,8 @@ io.on('connection', (socket) => {
                 buyIn:         SNG_BUYIN_TIERS.includes(+cfg.buyIn) ? +cfg.buyIn : SNG_BUYIN_TIERS[0]
             },
             blindLevels: STANDARD_BLIND_LEVELS,
-            currentLevel: 0, levelStartTime: null, prizePool: 0, tournamentOver: false
+            currentLevel: 0, levelStartTime: null, prizePool: 0, tournamentOver: false,
+            statsHistory: []
         };
         if (!seatPlayer(roomId, socket, user)) { delete roomGames[roomId]; }
     });
@@ -1034,9 +1183,11 @@ io.on('connection', (socket) => {
             config: {
                 name:      (cfg.name || '').toString().trim().slice(0, 20) || `${user.username}的现金桌`,
                 maxPlayers: clampInt(cfg.maxPlayers, 2, 9, 6),
-                sb, bb, ante: clampInt(cfg.ante, 0, 80, 0), minBuyIn, maxBuyIn
+                sb, bb, ante: clampInt(cfg.ante, 0, 80, 0), minBuyIn, maxBuyIn,
+                durationH: [0.5, 1, 2, 3, 4, 5, 6].includes(+cfg.durationH) ? +cfg.durationH : 2
             },
-            prizePool: 0, tournamentOver: false
+            prizePool: 0, tournamentOver: false,
+            statsHistory: [], tableEndAt: null, extraMs: 0
         };
         // 现金桌：房主先以观众身份进桌，点空座位「坐下」再带入（坐下式入座）
         joinAsSpectator(roomId, socket);
@@ -1089,8 +1240,7 @@ io.on('connection', (socket) => {
         if (game.players.length >= game.config.maxPlayers) { socket.emit('server_msg', '⚠️ 座位已满'); return; }
         if (occupiedSeats(game).has(seat)) { socket.emit('server_msg', '⚠️ 该座位已被占用'); return; }
         if (seatPlayer(roomId, socket, user, buyInChips, seat)) {
-            const p = game.players.find(pl => pl.userId === user.id);
-            if (p) p.buyIn = (p.buyIn || 0) + p.chips;   // 累计带入（战绩）
+            // 带入额已在 seatPlayer 内记录（buyIn=chips），此处不再重复累加
             // 入座后若满足开局条件且现金桌进行中/可开，尝试开局
             if (game.phase === PHASES.WAITING || game.phase === PHASES.SHOWDOWN) {
                 if (game.status === 'running') { if (liveCount(game) >= 2) startHand(roomId); }
@@ -1098,7 +1248,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 站起围观（现金桌）：兑出筹码→金币，离开座位但留在房间当观众
+    // 站起围观（现金桌）：坐出、保留筹码（不兑出！）；只有解散/退出房间时才结算
     socket.on('stand_up', () => {
         const roomId = socket.currentRoom;
         const game = roomId && roomGames[roomId];
@@ -1106,15 +1256,16 @@ io.on('connection', (socket) => {
         const idx = game.players.findIndex(p => p.userId === user.id);
         if (idx < 0) return;
         const p = game.players[idx];
+        if (p.reserveTimer) { clearTimeout(p.reserveTimer); p.reserveTimer = null; }
+        p.standing = true; p.away = true; p.reserved = false; p.sittingOut = true;
         const midHand = game.phase !== PHASES.WAITING && game.phase !== PHASES.SHOWDOWN && !p.folded;
-        if (midHand) { socket.emit('server_msg', '⚠️ 本手结束后才能站起，已为你预约离座'); p.leaving = true; broadcastState(roomId); return; }
-        if (p.reserveTimer) clearTimeout(p.reserveTimer);
-        const payout = cashOut(p);
-        game.players.splice(idx, 1);
-        if (game.buttonIdx > idx) game.buttonIdx--;
-        if (game.buttonIdx >= game.players.length) game.buttonIdx = 0;
-        io.in(roomId).emit('server_msg', `🧍 ${user.username} 站起围观，兑出 ${payout} 金币`);
-        broadcastState(roomId);
+        io.in(roomId).emit('server_msg', `🧍 ${user.username} 站起围观（筹码保留，结束时结算）`);
+        if (midHand) {
+            p.folded = true; p.hasActed = true;
+            if (game.actionOnIdx === idx) { clearActionTimer(game); afterAction(roomId); }
+            else if (isBettingRoundComplete(game)) advanceStage(roomId);
+            else broadcastState(roomId);
+        } else broadcastState(roomId);
         broadcastRoomList();
     });
 
@@ -1130,17 +1281,11 @@ io.on('connection', (socket) => {
         if (p.reserveTimer) clearTimeout(p.reserveTimer);
         p.reserveTimer = setTimeout(() => {
             const g = roomGames[roomId]; if (!g) return;
-            const i = g.players.findIndex(x => x.userId === user.id);
-            if (i < 0) return;
-            const pp = g.players[i];
-            if (!pp.reserved) return;
-            const payout = cashOut(pp);
-            g.players.splice(i, 1);
-            if (g.buttonIdx > i) g.buttonIdx--;
-            if (g.buttonIdx >= g.players.length) g.buttonIdx = 0;
-            io.in(roomId).emit('server_msg', `⌛ ${pp.username} 留座超时，自动站起，兑出 ${payout} 金币`);
-            const s = io.sockets.sockets.get(pp.socketId);
-            if (s && s.currentRoom === roomId) s.emit('server_msg', '⌛ 留座超时，已自动站起为观众');
+            const pp = g.players.find(x => x.userId === user.id);
+            if (!pp || !pp.reserved) return;
+            // 留座超时：转为「站起围观」（坐出、筹码保留，不兑出），结束时再结算
+            pp.reserved = false; pp.standing = true; pp.sittingOut = true; pp.reserveTimer = null;
+            io.in(roomId).emit('server_msg', `⌛ ${pp.username} 留座超时，自动站起围观（筹码保留）`);
             broadcastState(roomId); broadcastRoomList();
         }, 120000);
         io.in(roomId).emit('server_msg', `💺 ${user.username} 留座离座（2 分钟内回来保留座位）`);
@@ -1155,7 +1300,7 @@ io.on('connection', (socket) => {
         const p = game.players.find(pl => pl.userId === user.id);
         if (!p) return;
         if (p.reserveTimer) { clearTimeout(p.reserveTimer); p.reserveTimer = null; }
-        p.away = false; p.reserved = false;
+        p.away = false; p.reserved = false; p.standing = false;
         if (p.chips > 0) p.sittingOut = false;   // 有筹码才能立即回桌
         io.in(roomId).emit('server_msg', `🪑 ${user.username} 回到座位`);
         if (game.roomType === 'cash' && game.status === 'running'
@@ -1182,14 +1327,16 @@ io.on('connection', (socket) => {
                         else if (isBettingRoundComplete(game)) advanceStage(roomId);
                         else broadcastState(roomId);
                     } else {
+                        recordLeft(game, p);   // 战绩面板灰显 + 结束排名
                         const payout = cashOut(p);
                         io.to(roomId).emit('server_msg', `🚪 ${user.username} 离场，兑出 ${p.chips} 筹码 → ${payout} 金币`);
+                        if (p.reserveTimer) clearTimeout(p.reserveTimer);
                         game.players.splice(idx, 1);
                         if (game.buttonIdx > idx) game.buttonIdx--;
                         if (game.buttonIdx >= game.players.length) game.buttonIdx = 0;
                         socket.leave(roomId);
                         if (game.players.length === 0) {
-                            clearTimeout(game.nextHandTimer); clearTimeout(game.runoutTimer); clearActionTimer(game);
+                            clearTimeout(game.nextHandTimer); clearTimeout(game.runoutTimer); clearActionTimer(game); clearTimeout(game.tableTimer);
                             delete roomGames[roomId];
                         } else broadcastState(roomId);
                     }
@@ -1238,31 +1385,29 @@ io.on('connection', (socket) => {
         broadcastRoomList();
     });
 
-    // 解散房间：仅房主可用。SNG=奖池给筹码领先者；现金桌=各家按汇率兑出筹码，无奖池
+    // 解散/提前结束：仅房主。现金桌=结算筹码+公布排名；SNG=奖池给筹码领先者+公布排名
     socket.on('dissolve_room', () => {
         const roomId = socket.currentRoom;
         const game = roomId && roomGames[roomId];
         if (!game) return;
         if (game.ownerUserId !== user.id) { socket.emit('server_msg', '⚠️ 只有房主可以解散房间'); return; }
 
+        if (game.roomType === 'cash') {
+            io.in(roomId).emit('server_msg', `🛑 房主提前结束了比赛`);
+            endCashTable(roomId, '房主提前结束');   // 结算 + 排名 + 收件箱
+            return;
+        }
+        // SNG：奖池（抽水后）给当前筹码最多者，并公布排名
         clearTimeout(game.levelTimer); clearTimeout(game.nextHandTimer); clearTimeout(game.runoutTimer); clearActionTimer(game);
         for (const p of game.players) if (p.reserveTimer) clearTimeout(p.reserveTimer);
-        if (game.roomType === 'cash') {
-            // 现金桌：解散即各家把剩余筹码兑回金币（无奖池/不判赢）
-            for (const p of game.players) {
-                const payout = cashOut(p);
-                if (p.socketId) io.to(p.socketId).emit('server_msg', `🛑 房间解散，兑出 ${payout} 金币`);
-            }
-        } else if (game.prizePool > 0) {
-            // SNG：奖池（抽水后）给当前筹码最多者
-            const prize = sngPrize(game.prizePool);
-            const leader = [...game.players].sort((a, b) => b.chips - a.chips)[0];
-            if (leader && prize > 0) {
-                const fresh = db.getUserById(leader.userId).gold;
-                db.setGold(leader.userId, fresh + prize);
-                if (leader.socketId) io.to(leader.socketId).emit('gold_update', { gold: fresh + prize });
-            }
+        const prize = sngPrize(game.prizePool);
+        const leader = [...game.players].sort((a, b) => b.chips - a.chips)[0];
+        if (leader && prize > 0) {
+            const fresh = db.getUserById(leader.userId).gold;
+            db.setGold(leader.userId, fresh + prize);
+            if (leader.socketId) io.to(leader.socketId).emit('gold_update', { gold: fresh + prize });
         }
+        sendMatchResult(roomId, `【${game.config.name}】房主提前结束`, buildRanking(game, leader && leader.userId, prize));
         io.in(roomId).emit('server_msg', `🛑 房主解散了房间`);
         io.in(roomId).emit('room_dissolved');
         for (const p of game.players) {
@@ -1271,6 +1416,19 @@ io.on('connection', (socket) => {
         }
         delete roomGames[roomId];
         broadcastRoomList();
+    });
+
+    // 比赛加时（现金桌房主）：延长训练时长
+    socket.on('extend_match', ({ minutes }) => {
+        const roomId = socket.currentRoom;
+        const game = roomId && roomGames[roomId];
+        if (!game || game.roomType !== 'cash') return;
+        if (game.ownerUserId !== user.id) { socket.emit('server_msg', '⚠️ 只有房主可以加时'); return; }
+        const m = clampInt(minutes, 0, 120, 0);
+        if (m <= 0) return;
+        extendTable(roomId, m * 60000);
+        io.in(roomId).emit('server_msg', `⏱ 房主加时 ${m} 分钟`);
+        broadcastState(roomId);
     });
 
     // 现金桌补码：金币按汇率买入筹码，下一手生效（不能超过带入上限）；可设自动补码

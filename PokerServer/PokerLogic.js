@@ -1,5 +1,6 @@
 // PokerLogic.js
 const LookupTables = require('./LookupTables');
+const crypto = require('crypto');   // 密码学安全随机源（洗牌用，不可预测、无偏）
 
 class Card {
     constructor(suit, rank) {
@@ -25,15 +26,15 @@ class Deck {
             }
         }
     }
+    // Fisher-Yates 无偏洗牌，随机源用 crypto（CSPRNG，不可预测）。crypto.randomInt 本身就是无模偏的均匀整数
     shuffle() {
-        let n = this.cards.length;
-        while (n > 1) {
-            n--;
-            let k = Math.floor(Math.random() * (n + 1));
-            let temp = this.cards[k];
+        for (let n = this.cards.length - 1; n > 0; n--) {
+            const k = crypto.randomInt(n + 1);   // [0, n] 均匀
+            const temp = this.cards[k];
             this.cards[k] = this.cards[n];
             this.cards[n] = temp;
         }
+        this.lastShuffleId = crypto.randomBytes(4).toString('hex');   // 每手唯一标识，便于审计/确认确有重洗
     }
     drawCard() {
         if (this.cards.length === 0) return null;

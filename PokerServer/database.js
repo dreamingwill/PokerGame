@@ -35,6 +35,26 @@ module.exports = {
         return data.users[id];
     },
 
+    // 站内消息（收件箱）：比赛结束/排名等发给玩家（含离线/已离开者）
+    addMessage(userId, msg) {
+        const data = load();
+        const u = data.users[userId];
+        if (!u) return;
+        if (!u.messages) u.messages = [];
+        u.messages.push({ id: crypto.randomUUID(), ts: Date.now(), read: false, ...msg });
+        if (u.messages.length > 100) u.messages = u.messages.slice(-100);   // 上限 100 条
+        save(data);
+    },
+    getMessages(userId) {
+        const u = load().users[userId];
+        return (u && u.messages) ? u.messages.slice().reverse() : [];   // 新的在前
+    },
+    markMessagesRead(userId) {
+        const data = load();
+        const u = data.users[userId];
+        if (u && u.messages) { u.messages.forEach(m => m.read = true); save(data); }
+    },
+
     setAvatar(id, avatar) {
         const data = load();
         if (data.users[id]) { data.users[id].avatar = avatar; save(data); }
