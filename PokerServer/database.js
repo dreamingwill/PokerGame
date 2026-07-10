@@ -96,6 +96,36 @@ module.exports = {
         if (data.users[id]) { data.users[id].isAdmin = isAdmin; save(data); }
     },
 
+    // 每日签到：原子记录签到日期+连续天数，并发放奖励金币，返回新金币数
+    applyCheckin(id, dateStr, streak, reward) {
+        const data = load();
+        const u = data.users[id];
+        if (!u) return null;
+        u.lastCheckin = dateStr;
+        u.checkinStreak = streak;
+        u.gold = (u.gold || 0) + reward;
+        save(data);
+        return u.gold;
+    },
+
+    // Bug/建议反馈：每条一行追加到 feedback.jsonl（与牌谱一样是数据资产，需备份/迁移）
+    appendFeedback(record) {
+        try { fs.appendFileSync(path.join(__dirname, 'feedback.jsonl'), JSON.stringify(record) + '\n'); }
+        catch (e) { console.error('appendFeedback failed', e.message); }
+    },
+    getFeedback(limit = 200) {
+        const file = path.join(__dirname, 'feedback.jsonl');
+        if (!fs.existsSync(file)) return [];
+        let lines;
+        try { lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean); }
+        catch { return []; }
+        const out = [];
+        for (let i = lines.length - 1; i >= 0 && out.length < limit; i--) {
+            try { out.push(JSON.parse(lines[i])); } catch { /* skip */ }
+        }
+        return out;
+    },
+
     getAllUsers() {
         return Object.values(load().users).map(({ id, username, gold, isAdmin }) =>
             ({ id, username, gold, isAdmin: !!isAdmin })

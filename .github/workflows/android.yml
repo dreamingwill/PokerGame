@@ -1,6 +1,6 @@
 name: Build Android APK
 
-# 云端构建德扑道场 Android 薄壳 APK。
+# 云端构建德扑道场 Android 薄壳 APK，并发布到 Releases（固定标签 android-latest，永久直链）。
 # 触发：改动 mobile/ 目录后 push，或在 Actions 页手动 Run workflow。
 on:
   push:
@@ -8,6 +8,9 @@ on:
       - 'mobile/**'
       - '.github/workflows/android.yml'
   workflow_dispatch:
+
+permissions:
+  contents: write   # 发布 Release 需要
 
 jobs:
   build:
@@ -39,6 +42,19 @@ jobs:
       - name: Add Android platform
         run: npx cap add android
 
+      - name: Generate app icon / splash (if logo provided)
+        run: |
+          if [ -f assets/logo.png ]; then
+            echo "found assets/logo.png → 生成图标/启动图"
+            npx @capacitor/assets generate --android \
+              --iconBackgroundColor '#2f4a3e' \
+              --iconBackgroundColorDark '#2f4a3e' \
+              --splashBackgroundColor '#2f4a3e' \
+              --splashBackgroundColorDark '#0e1626'
+          else
+            echo "无 assets/logo.png，沿用默认图标"
+          fi
+
       - name: Sync web assets
         run: npx cap sync android
 
@@ -48,9 +64,25 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
+      - name: Rename APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk pokerdojo.apk
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: pokerdojo-debug-apk
-          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          path: mobile/pokerdojo.apk
           if-no-files-found: error
+
+      - name: Publish to Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-latest
+          name: 德扑道场 Android（最新）
+          body: |
+            德扑道场 Poker Dojo 安卓安装包（debug/未签名，可直接侧载）。
+            下载 `pokerdojo.apk` → 手机允许「安装未知来源应用」→ 安装。
+            打开即加载线上最新版 https://pokerdojo.space。
+            构建号：${{ github.run_number }} · 提交：${{ github.sha }}
+          prerelease: true
+          files: mobile/pokerdojo.apk

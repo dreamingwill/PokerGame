@@ -32,7 +32,9 @@ function getTransport() {
 function isConfigured() { return !!getTransport(); }
 
 async function sendCode(to, code, purpose) {
-    const subject = purpose === 'reset' ? '德扑道场 · 重置密码验证码' : '德扑道场 · 注册验证码';
+    const subject = purpose === 'reset' ? '德扑道场 · 重置密码验证码'
+                  : purpose === 'bind' ? '德扑道场 · 绑定邮箱验证码'
+                  : '德扑道场 · 注册验证码';
     const text = `【德扑道场 Poker Dojo】\n你的验证码是：${code}\n10 分钟内有效，请勿泄露。若非本人操作请忽略本邮件。`;
     const t = getTransport();
     if (!t) { console.log(`\n[mail:DEV] 未配置发信服务，验证码 → ${to} : ${code}  (${purpose})\n`); return { dev: true }; }
@@ -40,4 +42,19 @@ async function sendCode(to, code, purpose) {
     await t.sendMail({ from: c.from || `德扑道场 <${c.user}>`, to, subject, text });
     return { sent: true };
 }
-module.exports = { sendCode, isConfigured };
+// 用户 Bug/建议反馈 → 发一封到管理员邮箱（默认发给发信账号本身，可用 mail.json.feedbackTo 覆盖）
+async function sendFeedback(record) {
+    const subject = `德扑道场 · 用户反馈 · ${record.username}`;
+    const body = `用户：${record.username} (${record.userId})\n`
+        + `时间：${new Date(record.ts).toLocaleString('zh-CN', { hour12: false })}\n`
+        + `联系方式：${record.contact || '（未填）'}\n`
+        + `设备：${record.ua || ''}\n\n内容：\n${record.text}`;
+    const t = getTransport();
+    if (!t) { console.log(`\n[mail:DEV] 用户反馈（未配置发信）↓\n${body}\n`); return { dev: true }; }
+    const c = loadConfig();
+    const to = c.feedbackTo || c.user;
+    await t.sendMail({ from: c.from || `德扑道场 <${c.user}>`, to, subject, text: body });
+    return { sent: true };
+}
+
+module.exports = { sendCode, sendFeedback, isConfigured };

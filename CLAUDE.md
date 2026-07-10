@@ -60,12 +60,27 @@ Android / iOS / PC
 - **域名 pokerdojo.space**（Namecheap，.space 首年$1）；A 记录 @/www → 47.76.61.168（香港）
 - **TLS/HTTPS/WSS 已上线**：香港装 **Caddy**（`/etc/caddy/Caddyfile` reverse_proxy localhost:3000），自动 Let's Encrypt 证书（90 天自动续）。访问 **https://pokerdojo.space**（小锁🔒）；客户端 `io()` 同源 → 自动走 wss，无需改代码。阿里云安全组需放行 80/443。旧 http://47.76.61.168:3000 保留过渡。换服务器只需重指 A 记录 + 同 Caddyfile。
 - **邮箱账号系统（测试服，DEV 模式）**：注册改为 **用户名+邮箱+密码 → 邮件 6 位验证码 → 建号**；**忘记密码**（邮箱验证码重置）；**登录支持 用户名或邮箱**。`mailer.js`(nodemailer) 发信：优先 env(SMTP_*) > 本地 `mail.json`(gitignore/不覆盖)；**未配置则 DEV 回退**把验证码打到服务器日志。database.js 加 email 唯一/getUserByEmail/setPassword。E2E 测试：发码→验码→建号→邮箱登录→找回密码→新密码登录 全通。
-  - **待用户给 QQ 邮箱 + 授权码** → 我在服务器建 `mail.json`({host:'smtp.qq.com',port:465,user,pass,from}) 才真发邮件；现在是 DEV(日志看码)。老账号无邮箱仍可用户名登录。
+  - **真发邮件已上线**：香港生产用 **163 邮箱**（IMAP/SMTP，账号+授权码见各服务器 `mail.json`，**不入库**），两台服都建了 `mail.json`(smtp.163.com:465)。老账号无邮箱仍可用户名登录。（早期测试服曾用某 QQ 邮箱，后因发件箱杂乱改用 163。具体地址/授权码只存在服务器 mail.json，公开仓库不记录。）
+  - **老账号全清**：香港+测试服原有测试账号已全部删除（带时间戳备份 data.json.bak），改用邮箱重新注册。用户在 https://pokerdojo.space 重新注册后需提供用户名以 `create-admin.js` 升管理员。
+  - **「更换/绑定邮箱」（测试服）**：个人主页·资料 Tab 加 `#pi-email` 区，显示当前绑定邮箱+「绑定/更换」内联表单（新邮箱→发码→验码→确认）。服务端 `GET /api/me`(当前邮箱)、`POST /api/bind-email/send-code`+`/verify`（均 requireAuth，pendingBinds 按 userId 键）。E2E：注册→改邮箱→/api/me 反映→新邮箱登录 全通。**未上香港**。
+
+## 🎉 正式上线 + 签到 + 反馈 + 数据备份（2026-07-10，香港生产已上线）
+- **香港正式上线**：`https://pokerdojo.space` 对外开放，用户 **CYB** 已升管理员。生产数据（邮箱/金币/牌谱）为**核心资产必须保全**。
+- **数据自动备份（香港）**：`/root/PokerGame/backup.sh` 每日 04:00 cron，把 `data.json`/`hands.jsonl`/`feedback.jsonl` 快照到 `/root/PokerGame/backups/`（各留最近 30 份，自动清旧）；**异地副本**已 `scp` 到本地 `backups_offsite/`（gitignore，防服务器整机丢失）；deploy 脚本 tar 均排除这些数据文件（不覆盖）。换服务器仍须手动带走这些文件。
+- **每日签到（测试服，待验收）**：连续签到递增奖励表 `CHECKIN_REWARDS=[200,300,400,500,600,800,1000]`（第 1~7 天，7 天后封顶 1000，均值≈543/天），**断签重置**为第 1 天。日边界按香港时间 UTC+8。服务端 `GET /api/checkin/status`+`POST /api/checkin`（原子 `db.applyCheckin` 记 lastCheckin/checkinStreak+发金币）。客户端顶栏 🎁 按钮（未签到红点）+ 7 天进度网格弹窗。E2E：签到+200→重复签到 400→连签+300→断签重置+200 全通。
+- **Bug/建议反馈**：顶栏 🐞 按钮 → 文本+联系方式表单 → `POST /api/feedback`(requireAuth)。落库 `feedback.jsonl`（数据资产，纳入备份/deploy 不覆盖）**且同时发一封邮件到管理员邮箱**（`mailer.sendFeedback`，发给 mail.json 的 user，可 feedbackTo 覆盖；未配置则 DEV 打日志）。管理员 `GET /api/admin/feedback`。E2E：提交/空校验/管理员鉴权/UTF-8+emoji 往返/邮件回退 全通。
+- **⚠️ 签到+反馈目前只在测试服**，待用户验收后 `deploy.sh` 上香港。
+
+## 📱 Android 打包（2026-07-10，Capacitor 薄壳 + GitHub Actions 云端构建）
+- **薄壳方案（重要）**：`mobile/` 是 Capacitor 薄壳，`capacitor.config.json` 的 `server.url=https://pokerdojo.space`——APK 里几乎不含游戏代码，启动直接加载线上最新版。**游戏更新照旧 `deploy.sh` 推服务器即可，无需重发 APK**；只有改原生壳（图标/名字/启动图、加原生插件、升 SDK/Capacitor）才需重新出 APK。
+- **云端出 APK**：`.github/workflows/android.yml`——push `mobile/` 或 Actions 页手动 Run workflow，ubuntu runner 里 `npm install`→`npx cap add android`→`cap sync`→`gradlew assembleDebug`，产物 `app-debug.apk` 作为 artifact `pokerdojo-debug-apk` 下载，可直接侧载安装。本机无需装 Android SDK。
+- `mobile/android/`、`node_modules/` 不入库（CI 现场生成）。`appId=space.pokerdojo.app`，`appName=德扑道场`。debug APK 未签名/仅侧载；上架 Google Play 需另配签名 release + 隐私政策（待办）。
+- 待办：App 图标/启动图、（可选）签名 release、iOS(需 $99 开发者账号 + TestFlight)。
 
 ## 🎬 牌谱回放（2026-07-10，测试服）
 - 牌谱不再是纯文字：点历史某手 → **可视化回放**(`#replay-overlay`)，还原当时桌面：环形座位(自己旋到底部)+位置标签(BTN/SB/BB)+后手深度(BB)+各街下注/底池增长+思考时间+逐步/自动播放(⏮▶⏭ + 0.5~2× 速度)。对手牌仅在**未弃牌走到摊牌**时亮，弃牌者盖背变暗。
 - **后端仍存文字/结构化 JSONL**(hands.jsonl)，新增每手 seat/avatar 字段(回放布局用)；amount=该街行动后 currentBet 总额。帧构建数学自检通过(盲注→加注→跟注→收池→翻牌→下注→弃牌，stack/pot 正确)。
-- **破产救济/签到送币 已改为"等邮箱账号后再做"**：当前可无限注册小号，送金币无意义；须先有邮箱注册(需域名)才有意义。
+- ~~**破产救济/签到送币 已改为"等邮箱账号后再做"**~~：**签到已实现**（见上「签到+反馈」批次，2026-07-10，邮箱账号已上线故成立）；**破产救济**仍待做。
 
 ## ⏸️ 暂停点（2026-06-23，记录待办与待验收）
 - **待用户验收（已部署测试服 5090，未上生产）**：A 个人栏(资料/生涯战绩/牌谱)+VPIP/PFR/3bet/C-bet/AF/WTSD/盈亏曲线统计；B 桌内聊天+快捷短语+Emoji 表情(座位冒泡)。快捷短语/Emoji 当前是默认集，待用户定具体留哪些。

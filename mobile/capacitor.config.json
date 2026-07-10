@@ -1,6 +1,6 @@
 {
   "appId": "space.pokerdojo.app",
-  "appName": "德扑道场",
+  "appName": "Poker Dojo",
   "webDir": "www",
   "server": {
     "url": "https://pokerdojo.space",

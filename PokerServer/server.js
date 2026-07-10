@@ -152,6 +152,12 @@ app.get('/api/my-hands', requireAuth, (req, res) => {
     res.json(db.getHandsForUser(req.authUser.id, { limit, mode }));
 });
 
+// 当前账号信息（含邮箱，供个人主页显示/更换邮箱）
+app.get('/api/me', requireAuth, (req, res) => {
+    const u = req.authUser;
+    res.json({ id: u.id, username: u.username, gold: u.gold, email: u.email || null, isAdmin: !!u.isAdmin });
+});
+
 // 我的生涯统计（从牌谱聚合 VPIP/PFR/3bet/AF/WTSD…，可按 mode 筛选）
 app.get('/api/my-stats', requireAuth, (req, res) => {
     res.json(stats.computeUserStats(req.authUser.id, req.query.mode));
@@ -164,6 +170,64 @@ app.get('/api/my-messages', requireAuth, (req, res) => {
 app.post('/api/messages/read', requireAuth, (req, res) => {
     db.markMessagesRead(req.authUser.id);
     res.json({ ok: true });
+});
+
+// ===== 每日签到（连续签到递增奖励，断签重置）=====
+// 奖励表：第 1~7 天，第 7 天后封顶 1000。均值≈543/天，鼓励每日回访。可自由调。
+const CHECKIN_REWARDS = [200, 300, 400, 500, 600, 800, 1000];
+const rewardForStreak = s => CHECKIN_REWARDS[Math.min(Math.max(s, 1), 7) - 1];
+// 以香港时间(UTC+8)为「日」边界，服务器时区无关
+const dayStr = (offsetDays = 0) =>
+    new Date(Date.now() + 8 * 3600 * 1000 - offsetDays * 86400000).toISOString().slice(0, 10);
+
+app.get('/api/checkin/status', requireAuth, (req, res) => {
+    const u = req.authUser;
+    const today = dayStr(0);
+    const claimed = u.lastCheckin === today;
+    const curStreak = u.checkinStreak || 0;
+    // 未签到时预告：昨天签过则 streak+1，否则重置为 1
+    const nextStreak = claimed ? curStreak : (u.lastCheckin === dayStr(1) ? curStreak + 1 : 1);
+    res.json({
+        claimed,
+        streak: claimed ? curStreak : (u.lastCheckin === dayStr(1) ? curStreak : 0),
+        todayReward: rewardForStreak(nextStreak),
+        rewards: CHECKIN_REWARDS,
+        gold: u.gold
+    });
+});
+
+app.post('/api/checkin', requireAuth, (req, res) => {
+    const u = req.authUser;
+    const today = dayStr(0);
+    if (u.lastCheckin === today) return res.status(400).json({ error: '今日已签到' });
+    const streak = (u.lastCheckin === dayStr(1) ? (u.checkinStreak || 0) : 0) + 1;
+    const reward = rewardForStreak(streak);
+    const gold = db.applyCheckin(u.id, today, streak, reward);
+    console.log(`[checkin] ${u.username} 连续${streak}天 +${reward} → ${gold}`);
+    res.json({ ok: true, reward, streak, gold });
+});
+
+// ===== Bug / 建议反馈 =====
+app.post('/api/feedback', requireAuth, (req, res) => {
+    const text = (req.body?.text || '').toString().trim();
+    if (!text) return res.status(400).json({ error: '请填写反馈内容' });
+    if (text.length > 2000) return res.status(400).json({ error: '内容过长（≤2000字）' });
+    const rec = {
+        ts: Date.now(),
+        userId: req.authUser.id,
+        username: req.authUser.username,
+        text: text.slice(0, 2000),
+        contact: (req.body?.contact || '').toString().slice(0, 120),
+        ua: (req.headers['user-agent'] || '').slice(0, 200)
+    };
+    db.appendFeedback(rec);
+    console.log(`[feedback] ${req.authUser.username}: ${text.slice(0, 80)}`);
+    // 同时发一封到管理员邮箱（异步，失败不影响提交）
+    mailer.sendFeedback(rec).catch(e => console.error('反馈邮件发送失败', e.message));
+    res.json({ ok: true });
+});
+app.get('/api/admin/feedback', requireAdmin, (req, res) => {
+    res.json(db.getFeedback(Math.min(parseInt(req.query.limit) || 200, 500)));
 });
 
 // ===== Auth routes（邮箱验证码注册 + 忘记密码）=====
@@ -257,6 +321,34 @@ app.post('/api/forgot/reset', async (req, res) => {
     delete pendingResets[email];
     const user = db.getUserById(p.userId);
     res.json({ token: signToken(user), user: userPayload(user) });
+});
+
+// 绑定/更换邮箱（已登录用户）：老账号补邮箱以启用找回密码
+const pendingBinds = {};   // userId -> { email, code, expires, lastSent }
+app.post('/api/bind-email/send-code', requireAuth, async (req, res) => {
+    let { email } = req.body || {};
+    email = (email || '').trim().toLowerCase();
+    if (!EMAIL_RE.test(email)) return res.status(400).json({ error: '邮箱格式不正确' });
+    const existing = db.getUserByEmail(email);
+    if (existing && existing.id !== req.authUser.id) return res.status(409).json({ error: '该邮箱已被其他账号绑定' });
+    const prev = pendingBinds[req.authUser.id];
+    if (prev && Date.now() - prev.lastSent < 60000) return res.status(429).json({ error: '发送太频繁，请 1 分钟后再试' });
+    const code = gen6();
+    pendingBinds[req.authUser.id] = { email, code, expires: Date.now() + 600000, lastSent: Date.now() };
+    try { await mailer.sendCode(email, code, 'bind'); }
+    catch (e) { console.error('发信失败', e.message); return res.status(500).json({ error: '验证码发送失败，请稍后重试' }); }
+    res.json({ ok: true });
+});
+app.post('/api/bind-email/verify', requireAuth, (req, res) => {
+    const p = pendingBinds[req.authUser.id];
+    if (!p) return res.status(400).json({ error: '请先获取验证码' });
+    if (Date.now() > p.expires) { delete pendingBinds[req.authUser.id]; return res.status(400).json({ error: '验证码已过期' }); }
+    if (String((req.body || {}).code).trim() !== p.code) return res.status(400).json({ error: '验证码错误' });
+    const existing = db.getUserByEmail(p.email);
+    if (existing && existing.id !== req.authUser.id) return res.status(409).json({ error: '该邮箱已被占用' });
+    db.setEmail(req.authUser.id, p.email);
+    delete pendingBinds[req.authUser.id];
+    res.json({ ok: true, email: p.email });
 });
 
 // ===== Game helpers =====

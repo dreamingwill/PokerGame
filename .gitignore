@@ -38,3 +38,4 @@ PokerServer/secret.key
 
 # 发信 SMTP 凭据（授权码，绝不入库/勿覆盖）
 PokerServer/mail.json
+backups_offsite/
