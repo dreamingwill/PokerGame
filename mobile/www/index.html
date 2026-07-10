@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>德扑道场 Poker Dojo</title>
+    <style>
+        html, body { height: 100%; margin: 0; }
+        body {
+            background: linear-gradient(160deg, #1b2740, #0e1626);
+            color: #e7eefb; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+            display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; padding: 24px;
+        }
+        .logo { font-size: 26px; font-weight: bold; letter-spacing: 2px; }
+        .spin { width: 34px; height: 34px; border: 3px solid rgba(255,255,255,0.2); border-top-color: #f4d35e; border-radius: 50%; animation: r 0.9s linear infinite; }
+        @keyframes r { to { transform: rotate(360deg); } }
+        .tip { opacity: 0.65; font-size: 13px; }
+        a { color: #3a86ff; }
+    </style>
+</head>
+<body>
+    <!-- 仅在无法连上 pokerdojo.space（如断网）时才会看到这个兜底页。
+         正常情况下 Capacitor 会直接加载 https://pokerdojo.space 的最新版。 -->
+    <div class="logo">🃏 德扑道场</div>
+    <div class="spin"></div>
+    <div class="tip">正在连接服务器…<br>若长时间无响应，请检查网络后重开 App</div>
+    <div class="tip"><a href="https://pokerdojo.space">https://pokerdojo.space</a></div>
+</body>
+</html>

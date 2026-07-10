@@ -1,0 +1,13 @@
+{
+  "appId": "space.pokerdojo.app",
+  "appName": "德扑道场",
+  "webDir": "www",
+  "server": {
+    "url": "https://pokerdojo.space",
+    "androidScheme": "https",
+    "cleartext": false
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}

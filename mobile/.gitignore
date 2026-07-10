@@ -1,0 +1,3 @@
+# CI 里现场生成，不入库
+node_modules/
+android/
