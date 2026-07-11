@@ -71,8 +71,16 @@ Android / iOS / PC
 - **Bug/建议反馈**：顶栏 🐞 按钮 → 文本+联系方式表单 → `POST /api/feedback`(requireAuth)。落库 `feedback.jsonl`（数据资产，纳入备份/deploy 不覆盖）**且同时发一封邮件到管理员邮箱**（`mailer.sendFeedback`，发给 mail.json 的 user，可 feedbackTo 覆盖；未配置则 DEV 打日志）。管理员 `GET /api/admin/feedback`。E2E：提交/空校验/管理员鉴权/UTF-8+emoji 往返/邮件回退 全通。
 - **✅ 已上香港生产**（2026-07-10 `deploy.sh`）：签到/反馈/更换邮箱三项已同步香港，端点 checkin/feedback/bind-email 齐全，data.json 未被覆盖（CYB 等用户数据完好），https://pokerdojo.space 验证 200/401 正常。
 
+## ⚠️ 访问排障备忘：沙特实验室过滤 poker 域名（勿再误判为服务器/大陆问题）
+- **现象**：开发者在**沙特实验室网络**打不开 `https://pokerdojo.space`（TLS 被重置 / http 带域名 Host 被注入 503），但**手机流量、国内玩家、超级 Ping 各地、境外全部正常**。
+- **真因**：不是服务器/域名/大陆 GFW 的问题——是**沙特实验室那条网络按「poker/赌博」类目过滤了这个域名**（触发点极可能是域名里的 `poker` 关键词/SNI）。服务器与 HTTPS 证书全球健康（Caddy 日志可见境外客户端正常握手反代）。
+- **玩家在国内、实测可正常访问**（含超级 Ping），所以**产品无需任何改动**。
+- **开发者在实验室的绕过办法**：浏览器直接用 `http://47.76.61.168:3000`（请求无域名，溜过过滤）/ 手机流量 / VPN。**不要为此把 APK 改指 IP**（见下：会破坏迁移便利+加密）。
+- 教训：下次有人报「打不开」，先问**在哪个网络**（实验室？国内？手机流量？），别又按大陆 GFW/备案 绕一圈。
+
 ## 📱 Android 打包（2026-07-10，Capacitor 薄壳 + GitHub Actions 云端构建）
 - **薄壳方案（重要）**：`mobile/` 是 Capacitor 薄壳，`capacitor.config.json` 的 `server.url=https://pokerdojo.space`——APK 里几乎不含游戏代码，启动直接加载线上最新版。**游戏更新照旧 `deploy.sh` 推服务器即可，无需重发 APK**；只有改原生壳（图标/名字/启动图、加原生插件、升 SDK/Capacitor）才需重新出 APK。
+- **APK 必须指向域名，切勿指向 IP**：服务器是临时的、迁移会换 IP。指**域名**→迁移只改 DNS，已装 APK 自动生效、零改动（真·一劳永逸）；指 **IP**→一换服务器所有已装 APK 失效需重发，且丢失 https/wss 加密、还要开 Android 明文例外。开发者在沙特实验室的本地不便用 IP 浏览器/流量绕过即可，别固化进 APK。
 - **云端出 APK**：`.github/workflows/android.yml`——push `mobile/` 或 Actions 页手动 Run workflow，ubuntu runner 里 `npm install`→`npx cap add android`→`cap sync`→`gradlew assembleDebug`，产物 `app-debug.apk` 作为 artifact `pokerdojo-debug-apk` 下载，可直接侧载安装。本机无需装 Android SDK。
 - `mobile/android/`、`node_modules/` 不入库（CI 现场生成）。`appId=space.pokerdojo.app`，**`appName=Poker Dojo`**（桌面显示名）。debug APK 未签名/仅侧载；上架 Google Play 需另配签名 release + 隐私政策（待办）。
 - **图标已启用**：`mobile/assets/logo.png`（1500×1500 鸟居+扑克，深绿）→ CI 用 `@capacitor/assets` 生成各密度图标/自适应/启动图（bg `#2f4a3e`）。

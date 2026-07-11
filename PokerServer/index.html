@@ -108,7 +108,8 @@
             background: #1a2a3a; border: 1px solid rgba(255,255,255,0.1);
             border-radius: 16px; padding: 32px; width: 340px;
         }
-        #auth-box h1 { text-align: center; color: #f4d35e; margin-bottom: 4px; font-size: 24px; }
+        #auth-box h1 { text-align: center; color: #f4d35e; margin-bottom: 4px; font-size: 24px; display: flex; align-items: center; justify-content: center; gap: 10px; }
+        .auth-logo { width: 44px; height: 44px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.4); vertical-align: middle; }
         .auth-sub { text-align: center; color: #8fa2c4; font-size: 12px; margin-bottom: 20px; letter-spacing: 0.5px; }
         .auth-tabs { display: flex; margin-bottom: 20px; border-radius: 8px; overflow: hidden; }
         .auth-tab {
@@ -824,7 +825,7 @@
 <!-- ===== Auth overlay ===== -->
 <div id="auth-overlay">
     <div id="auth-box">
-        <h1>🃏 德扑道场</h1>
+        <h1><img src="/avatars/logo.png" class="auth-logo" alt="">德扑道场</h1>
         <div class="auth-sub">Poker Dojo · 好友开房 · 切磋成长</div>
         <div class="auth-tabs">
             <button class="auth-tab active" onclick="showTab('login')">登录</button>
