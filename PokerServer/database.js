@@ -139,18 +139,20 @@ module.exports = {
     },
 
     // 读取某玩家参与的最近 N 手牌谱（按时序倒序）；可按模式筛选
-    getHandsForUser(userId, { limit = 30, mode = null } = {}) {
+    getHandsForUser(userId, { limit = 30, offset = 0, mode = null } = {}) {
         const file = path.join(__dirname, 'hands.jsonl');
         if (!fs.existsSync(file)) return [];
         let lines;
         try { lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean); }
         catch { return []; }
         const out = [];
+        let skipped = 0;   // 跳过最新的 offset 手（分页用）
         for (let i = lines.length - 1; i >= 0 && out.length < limit; i--) {
             let h;
             try { h = JSON.parse(lines[i]); } catch { continue; }
             if (mode && h.mode !== mode) continue;
             if (!h.seats || !h.seats.some(s => s.userId === userId)) continue;
+            if (skipped < offset) { skipped++; continue; }
             out.push(h);
         }
         return out;

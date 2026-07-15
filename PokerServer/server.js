@@ -148,8 +148,9 @@ function requireAuth(req, res, next) {
 // 我的牌谱（最近若干手，可按 mode=sng|cash 筛选）
 app.get('/api/my-hands', requireAuth, (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 30, 100);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
     const mode = (req.query.mode === 'sng' || req.query.mode === 'cash') ? req.query.mode : null;
-    res.json(db.getHandsForUser(req.authUser.id, { limit, mode }));
+    res.json(db.getHandsForUser(req.authUser.id, { limit, offset, mode }));
 });
 
 // 当前账号信息（含邮箱，供个人主页显示/更换邮箱）

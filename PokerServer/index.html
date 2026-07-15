@@ -803,6 +803,10 @@
             color: #cdd9ef; border-radius: 16px; padding: 6px 14px; font-size: 13px; cursor: pointer; }
         .hist-filter .hf.active { background: #3a86ff; border-color: #3a86ff; color: #fff; }
         .hist-empty { text-align: center; color: #7e90b0; padding: 30px; }
+        .hist-more { display: block; width: 100%; padding: 10px; margin: 4px 0 8px; cursor: pointer;
+            background: rgba(255,255,255,0.06); color: #cdd9ef; border: 1px solid rgba(255,255,255,0.14);
+            border-radius: 10px; font-size: 13px; font-weight: bold; }
+        .hist-more:hover { background: rgba(255,255,255,0.12); }
         .hist-item { background: rgba(255,255,255,0.05); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;
             cursor: pointer; border-left: 3px solid #555; }
         .hist-item.win { border-left-color: #4ade80; }
@@ -2133,17 +2137,34 @@ function phistFilter(btn, mode) {
     btn.parentElement.querySelectorAll('.hf').forEach(b => b.classList.remove('active'));
     btn.classList.add('active'); phistMode = mode; loadHistory('history-list2', mode);
 }
+const HIST_PAGE = 40;
+let histState = {};         // listId -> { mode, offset, loading, done }
 async function loadHistory(listId, mode) {
     listId = listId || 'history-list'; mode = mode || '';
-    const list = document.getElementById(listId);
-    list.innerHTML = '<div class="hist-empty">加载中…</div>';
+    histState[listId] = { mode, offset: 0, loading: false, done: false };
+    histHandsByList[listId] = [];
+    document.getElementById(listId).innerHTML = '<div class="hist-empty">加载中…</div>';
+    await fetchHistPage(listId, true);
+}
+async function fetchHistPage(listId, first) {
+    const st = histState[listId];
+    if (!st || st.loading || st.done) return;
+    st.loading = true;
+    const btn = document.getElementById('histmore-' + listId);
+    if (btn) btn.textContent = '加载中…';
     try {
         const token = localStorage.getItem('token');
-        const q = mode ? `?mode=${mode}&limit=40` : '?limit=40';
+        const q = `?limit=${HIST_PAGE}&offset=${st.offset}` + (st.mode ? `&mode=${st.mode}` : '');
         const res = await fetch('/api/my-hands' + q, { headers: { Authorization: `Bearer ${token}` } });
         if (!res.ok) throw 0;
-        renderHistory(await res.json(), listId);
-    } catch { list.innerHTML = '<div class="hist-empty">读取牌谱失败</div>'; }
+        const page = await res.json();
+        histHandsByList[listId] = (histHandsByList[listId] || []).concat(page);
+        st.offset += page.length;
+        if (page.length < HIST_PAGE) st.done = true;
+        renderHistory(histHandsByList[listId], listId);
+    } catch {
+        if (first) document.getElementById(listId).innerHTML = '<div class="hist-empty">读取牌谱失败</div>';
+    } finally { st.loading = false; }
 }
 let histHandsByList = {};   // listId -> hands[]（供点击回放取用）
 function renderHistory(hands, listId) {
@@ -2152,7 +2173,7 @@ function renderHistory(hands, listId) {
     const list = document.getElementById(listId);
     if (!hands.length) { list.innerHTML = '<div class="hist-empty">暂无牌谱记录</div>'; return; }
     const fmtC = s => s.replace(/T/g, '10');
-    list.innerHTML = hands.map((h, idx) => {
+    const items = hands.map((h, idx) => {
         const me = (h.seats || []).find(s => s.userId === myUserId);
         const res = (h.results || []).find(r => r.userId === myUserId);
         const won = res ? res.won : 0;
@@ -2167,6 +2188,11 @@ function renderHistory(hands, listId) {
                 <span class="hi-net">${won > 0 ? '赢 ' + won.toLocaleString() : '—'} ▶</span>
             </div></div>`;
     }).join('');
+    const st = histState[listId];
+    const footer = (st && !st.done)
+        ? `<button class="hist-more" id="histmore-${listId}" onclick="fetchHistPage('${listId}')">加载更多（已 ${hands.length} 手）</button>`
+        : `<div class="hist-empty" style="font-size:11px">— 已全部 ${hands.length} 手 —</div>`;
+    list.innerHTML = items + footer;
 }
 function openReplayFrom(listId, idx) {
     const h = (histHandsByList[listId] || [])[idx];
