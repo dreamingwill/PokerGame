@@ -139,7 +139,7 @@ module.exports = {
     },
 
     // 读取某玩家参与的最近 N 手牌谱（按时序倒序）；可按模式筛选
-    getHandsForUser(userId, { limit = 30, offset = 0, mode = null } = {}) {
+    getHandsForUser(userId, { limit = 30, offset = 0, mode = null, room = null } = {}) {
         const file = path.join(__dirname, 'hands.jsonl');
         if (!fs.existsSync(file)) return [];
         let lines;
@@ -151,6 +151,7 @@ module.exports = {
             let h;
             try { h = JSON.parse(lines[i]); } catch { continue; }
             if (mode && h.mode !== mode) continue;
+            if (room && h.roomId !== room) continue;   // 只看某房间（游戏内=当前本局）
             if (!h.seats || !h.seats.some(s => s.userId === userId)) continue;
             if (skipped < offset) { skipped++; continue; }
             out.push(h);

@@ -150,7 +150,8 @@ app.get('/api/my-hands', requireAuth, (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 30, 100);
     const offset = Math.max(parseInt(req.query.offset) || 0, 0);
     const mode = (req.query.mode === 'sng' || req.query.mode === 'cash') ? req.query.mode : null;
-    res.json(db.getHandsForUser(req.authUser.id, { limit, offset, mode }));
+    const room = req.query.room ? String(req.query.room).slice(0, 12) : null;
+    res.json(db.getHandsForUser(req.authUser.id, { limit, offset, mode, room }));
 });
 
 // 当前账号信息（含邮箱，供个人主页显示/更换邮箱）
