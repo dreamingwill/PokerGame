@@ -95,6 +95,8 @@ Android / iOS / PC
 - **战绩连续（训练赛口径，已上香港）**：现金桌「退出房间」不再立即兑出——改为**站起保留座位+筹码**（复用 standing 机制），只在**本局结束/解散/全员离开**时统一 `endCashTable` 结算金币；离开后回大厅可「重新进入」(`join_room` 重连分支清 standing/reserved、有筹码回座、局间续局)接上原座位/带入/盈亏（战绩不清零）。leave_room 里全员离桌(无 active 玩家+无观众)自动 `endCashTable` 收尾防空房悬挂。修正客户端 leaveRoom/standUp 文案(不兑出、结束才结算)。E2E 验证：买入扣550→退出金币不变+座位筹码留→重进带入5000不清零+回座→解散才兑出(9288→9796)，全通。
 
 ## 🗺️ 商业化体验路线图（2026-07-16 用户反馈，参考德扑之星）
+- **现金桌到点不打断牌局**：训练时长到点若正有牌局→`onTableTimeUp` 挂起 `game.pendingEnd`(不立即结算)、`match_ending_soon` 提醒(房主自动开比赛设置可加时)，本手结束(scheduleNextHand)后若仍 pendingEnd 才 `endCashTable`；`extendTable` 加时清 pendingEnd。局间到点则直接结算。（照搬 pendingLevelUp「涨盲等本手」模式。）
+- **聊天常用语顶部遮挡修复**：面板 max-height 56vh 装不下 chat-list+12条→展开常用语时隐藏消息列表腾空间；toggleChat 打开时复位。
 - **站起 vs 留座 区分修复(测试服)**：之前俩功能一样。现**留座离桌**=保留座位(reserved，2分钟自动转…)，**站起围观**=`vacateSeat` 把玩家移出 `game.players` 进 `game.vacatedPlayers`(座位腾空、他人可坐、本人转观众)，**筹码保留只在结束/解散/全员离开时 `endCashTable` 统一结算**(不立即兑出)；`sit_back` 从 vacatedPlayers 带原筹码回空座；state 加 `vacatedUserIds` 供客户端显示「回到座位」。空房清理前若有 vacatedPlayers 走 endCashTable 防金币丢失。E2E：站起离座+筹码不兑→留座保座→带筹码回座→解散才结算 全通。
 - **语音模块(朋友开发,已合并)**：`git merge` 零冲突并入。按住 `#voice-btn` 录音→上传→房间内 10 秒可点击气泡播放，不进聊天历史；服务端 `voice_tmp/`(1h TTL)+ `music-metadata` 校验时长(15s)+限流。deploy npm install 会装依赖。
 - **菜单精简**：桌内菜单去掉「当前战绩」「牌谱回顾」(已由桌面左右边缘箭头直达)。
@@ -105,7 +107,7 @@ Android / iOS / PC
   - ~~**#7 点头像看本局数据**~~ **已做(测试服)**：点任意头像(`avatar-block` onclick)→ `#avatar-popup` 弹层显示**本局** VPIP/PFR/3bet/**ATS**/手数/盈亏（`stats.js` 加 `room` 过滤+ATS偷盲率；服务端 `req_player_stats`→`player_stats` 按当前房间聚合）+ 表情行；**给别人发表情=从自己头像飞到对方头像并冒泡**(`flyEmote`，`emote` 带 targetUserId)，给自己=广播冒泡。E2E 接口验证含 ATS 字段。
   - **快捷短语已换**：换成截图4那 12 条扑克梗(竖排整行 `.chat-phrases` flex-column)。
   - **#6 聊天/表情重构**：聊天抽屉=聊天记录+输入框+「常用语」按钮(短语)；表情=点头像发（自己/对方）；**语音**(按住录一段播给全体)后置为语音模块。
-  - **#4 高牌定庄+动画**：开局给每人发一张牌、最大者当庄，翻牌动画（替代现在默认房主为首庄）。
+  - ~~**#4 高牌定庄+动画**~~ **已做(测试服)**：开赛首手前每人发一张牌比大小(rank，同点花色 S>H>D>C)，最大者本场首庄；`drawForButton` 广播 `button_draw`(各家牌+winnerId)，客户端 `showButtonDraw` 座位上方翻牌+赢家金光(2.8s)，然后正式发牌；`forceButtonSeat` 让首手用抽出的庄不轮转，之后正常轮转。`start_game`/`tryStartHand`→`beginPlay`(首手定庄/之后 startHand)。E2E：赢家=首庄、第二手轮转 通过。
   - ~~**#2 时间卡系统**~~ **已做(测试服)**：初始思考 **18s**；每次 **+15s 消耗 1 张时间卡**，**仍保留单次行动累计 2min 硬上限**(`EXTRA_MAX`，防单手无限拖)。时间卡数量 = **时长(h) × 买入BB × 0.25**（`timeCardsFor`，1h/100BB=25，偏宽松够用）；SNG 无时长按起始筹码给一份。**补码(`chargeRebuy`)、比赛加时(`extendTable`)自动补卡**；站起/回座保留卡数。`add_time` 消耗卡+校验上限；`canAddTime` 加"有卡"判断；state 下发每人 `timeCards`，客户端**加时按钮旁显示 ×N** 剩余卡。E2E：发放25/消耗到17/2min上限(138s)/canAddTime 全对。（⚠️注意：改 ACTION_TIME 那块曾误删 `EXTRA_MAX` 致 broadcastState 抛错、整手卡住，已补回——常量删改务必全局搜引用。）比赛加时**不需全员同意**(用户改主意)，保持房主二次确认。
   - **#6 聊天/表情**：聊天面板**删表情行**(表情已移到点头像)、**常用语改折叠按钮+可滚动**(12条扑克梗)；给别人发表情=从自己头像飞到对方(`flyEmote` CSS keyframe，手机更稳)。
   - **行动浮层容器透传**(`#action-bar` pointer-events:none + 按钮 auto)：自己行动时也能点头像看数据。**站起回座不弹买入框**(带原筹码直接回)。
