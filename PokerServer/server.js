@@ -100,12 +100,13 @@ function gameAnte(game) {
 const ACTION_TIME = 18000;    // 初始 18s
 const EXTRA_STEP  = 15000;    // 每次加时 +15s（消耗 1 张时间卡）
 const EXTRA_MAX   = 120000;   // 单次行动累计加时上限 2min（时间卡之外的硬上限）
-// 时间卡数量 = 时长(h) × 买入BB × 0.25（现金桌）；1h 带入 100BB → 25 张。偏宽松，够用为主。
+// 买入/补码时间卡 = 买入BB × 0.25（不随房间时长翻倍）：100BB→25、50BB→13。够用为主。
+// （比赛加时另按「增加的时长」比例补卡，见 extendTable。）
 function timeCardsFor(game, chips) {
     const bb = gameBB(game) || 1;
     const buyInBB = chips / bb;
-    if (game.roomType === 'cash') return Math.round((game.config.durationH || 2) * buyInBB * 0.25);
-    return Math.max(6, Math.round(buyInBB * 0.1));   // SNG 无时长，按起始筹码给一份
+    if (game.roomType === 'cash') return Math.round(buyInBB * 0.25);
+    return Math.max(6, Math.round(buyInBB * 0.1));   // SNG 按起始筹码给一份
 }
 const RUNOUT_DELAY = 1400;    // all-in 摊牌跑马，每条街发牌间隔
 const FIXED_BUYIN  = 50;      // 旧默认（保留兼容）

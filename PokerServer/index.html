@@ -679,11 +679,11 @@
         .chat-emotes { border-top: 1px solid rgba(255,255,255,0.08); }
         .emote-btn { flex: 0 0 auto; width: 38px; height: 38px; font-size: 20px; border-radius: 9px;
             background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); cursor: pointer; }
-        .chat-phrases { flex-direction: column; align-items: stretch; max-height: 46vh; overflow-y: auto; }   /* 短语较长→竖排整行+可滚动看全 */
+        .chat-phrases { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 4px; max-height: 56vh; overflow-y: auto; }   /* 单列竖排(nowrap 防多列横滑)，字体小一页显全 */
         .chat-phrase-toggle { flex: 0 0 auto; background: rgba(255,255,255,0.08); color: #cdd9ef;
             border: 1px solid rgba(255,255,255,0.16); border-radius: 9px; padding: 0 12px; font-size: 13px; font-weight: bold; cursor: pointer; }
         .chat-phrase-toggle.on { background: #3a86ff; color: #fff; border-color: #3a86ff; }
-        .phrase-btn { width: 100%; text-align: left; padding: 9px 12px; font-size: 13.5px; border-radius: 10px; white-space: normal;
+        .phrase-btn { width: 100%; text-align: left; padding: 6px 10px; font-size: 12px; line-height: 1.25; border-radius: 8px; white-space: normal;
             background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.14); color: #dfe7f5; cursor: pointer; }
         .phrase-btn::before { content: "◆ "; color: #6f88b5; }
         .chat-input-row { display: flex; gap: 8px; padding: 8px 10px 10px; }
@@ -4074,7 +4074,7 @@ document.addEventListener('click', (e) => {
 }, true);
 // 点牌桌空白处自动收起临时小窗（战绩/牌谱/聊天/菜单），不必点 ✕
 document.addEventListener('click', (e) => {
-    if (e.target.closest('.side-panel, #table-menu, #hand-detail, #replay-overlay, .modal-mask, #profile-overlay, #inbox-panel, .edge-arrow, .tc-btn')) return;
+    if (e.target.closest('.side-panel, #chat-panel, #avatar-popup, #table-menu, #hand-detail, #replay-overlay, .modal-mask, #profile-overlay, #inbox-panel, .edge-arrow, .tc-btn')) return;
     ['history-panel', 'stats-panel', 'chat-panel', 'table-menu'].forEach(id => {
         const el = document.getElementById(id);
         if (el && el.style.display !== 'none') el.style.display = 'none';
