@@ -1375,6 +1375,33 @@ function vacateSeat(game, idx) {
     if (game.buttonIdx >= game.players.length) game.buttonIdx = 0;
 }
 
+// 站起围观者回座：从 vacatedPlayers 取出、带原筹码放回一个空座（不重复扣买入），并清掉 vacated 记录。
+// sit_down 和 sit_back 都走这里，避免「坐下新建 + 回座又恢复」产生两个自己。
+// 返回 true 表示「本人是站起围观者、已处理（成功或明确无空座）」，调用方应就此 return，不再走普通入座。
+function restoreVacatedPlayer(roomId, socket, user, preferSeat) {
+    const game = roomGames[roomId];
+    if (!game || !game.vacatedPlayers) return false;
+    const vi = game.vacatedPlayers.findIndex(v => v.userId === user.id);
+    if (vi < 0) return false;
+    let seat = preferSeat;
+    if (seat == null || seat < 0 || seat >= game.config.maxPlayers || occupiedSeats(game).has(seat)) seat = firstFreeSeat(game);
+    if (seat < 0) { socket.emit('server_msg', '⚠️ 暂无空座，无法回座'); return true; }
+    const vp = game.vacatedPlayers.splice(vi, 1)[0];
+    const inHand = game.phase !== PHASES.WAITING && game.phase !== PHASES.SHOWDOWN;
+    lobbySockets.delete(socket.id);
+    socket.join(roomId); socket.currentRoom = roomId;
+    game.players.push({
+        userId: user.id, socketId: socket.id, username: user.username, seat,
+        avatar: db.getUserById(user.id)?.avatar || null,
+        chips: vp.chips, currentBet: 0, buyIn: vp.buyIn, handsPlayed: vp.handsPlayed || 0,
+        folded: inHand, allIn: false, hasActed: false, ready: false, sittingOut: vp.chips <= 0
+    });
+    io.in(roomId).emit('server_msg', `🪑 ${user.username} 回到座位（${seat + 1} 号位，带回原筹码）`);
+    if (game.status === 'running' && !inHand && liveCount(game) >= 2) scheduleNextHand(roomId);
+    broadcastState(roomId); broadcastRoomList();
+    return true;
+}
+
 // 为某座位扣金币、登记挂起补码（下一手生效）。成功返回 true
 function chargeRebuy(p, chips) {
     const fresh = db.getUserById(p.userId);
@@ -1660,6 +1687,8 @@ io.on('connection', (socket) => {
         if (!game) return;
         if (game.roomType !== 'cash') { socket.emit('server_msg', '⚠️ 该房间无需坐下'); return; }
         if (game.players.find(p => p.userId === user.id)) { socket.emit('server_msg', '⚠️ 你已入座'); return; }
+        // 站起围观者点座位坐下：带原筹码回座（不重复扣买入 + 清 vacated 记录），杜绝「两个自己」
+        if (restoreVacatedPlayer(roomId, socket, user, seat)) return;
         if (game.players.length >= game.config.maxPlayers) { socket.emit('server_msg', '⚠️ 座位已满'); return; }
         if (occupiedSeats(game).has(seat)) { socket.emit('server_msg', '⚠️ 该座位已被占用'); return; }
         if (seatPlayer(roomId, socket, user, buyInChips, seat)) {
@@ -1722,26 +1751,8 @@ io.on('connection', (socket) => {
         const roomId = socket.currentRoom;
         const game = roomId && roomGames[roomId];
         if (!game) return;
-        // 站起围观回座：从 vacatedPlayers 恢复到空座（带回原筹码，不再扣买入）
-        if (game.vacatedPlayers) {
-            const vi = game.vacatedPlayers.findIndex(v => v.userId === user.id);
-            if (vi >= 0) {
-                const seat = firstFreeSeat(game);
-                if (seat < 0) { socket.emit('server_msg', '⚠️ 暂无空座，无法回座'); return; }
-                const vp = game.vacatedPlayers.splice(vi, 1)[0];
-                const inHand = game.phase !== PHASES.WAITING && game.phase !== PHASES.SHOWDOWN;
-                game.players.push({
-                    userId: user.id, socketId: socket.id, username: user.username, seat,
-                    avatar: db.getUserById(user.id)?.avatar || null,
-                    chips: vp.chips, currentBet: 0, buyIn: vp.buyIn, handsPlayed: vp.handsPlayed || 0,
-                    folded: inHand, allIn: false, hasActed: false, ready: false, sittingOut: vp.chips <= 0
-                });
-                io.in(roomId).emit('server_msg', `🪑 ${user.username} 回到座位（${seat + 1} 号位）`);
-                if (game.status === 'running' && !inHand && liveCount(game) >= 2) scheduleNextHand(roomId);
-                broadcastState(roomId); broadcastRoomList();
-                return;
-            }
-        }
+        // 站起围观回座：从 vacatedPlayers 带原筹码回一个空座（与 sit_down 共用同一逻辑，避免重复条目）
+        if (restoreVacatedPlayer(roomId, socket, user, -1)) return;
         const p = game.players.find(pl => pl.userId === user.id);
         if (!p) return;
         if (p.reserveTimer) { clearTimeout(p.reserveTimer); p.reserveTimer = null; }

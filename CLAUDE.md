@@ -95,6 +95,10 @@ Android / iOS / PC
 - **战绩连续（训练赛口径，已上香港）**：现金桌「退出房间」不再立即兑出——改为**站起保留座位+筹码**（复用 standing 机制），只在**本局结束/解散/全员离开**时统一 `endCashTable` 结算金币；离开后回大厅可「重新进入」(`join_room` 重连分支清 standing/reserved、有筹码回座、局间续局)接上原座位/带入/盈亏（战绩不清零）。leave_room 里全员离桌(无 active 玩家+无观众)自动 `endCashTable` 收尾防空房悬挂。修正客户端 leaveRoom/standUp 文案(不兑出、结束才结算)。E2E 验证：买入扣550→退出金币不变+座位筹码留→重进带入5000不清零+回座→解散才兑出(9288→9796)，全通。
 
 ## 🗺️ 商业化体验路线图（2026-07-16 用户反馈，参考德扑之星）
+- **站起 vs 留座 区分修复(测试服)**：之前俩功能一样。现**留座离桌**=保留座位(reserved，2分钟自动转…)，**站起围观**=`vacateSeat` 把玩家移出 `game.players` 进 `game.vacatedPlayers`(座位腾空、他人可坐、本人转观众)，**筹码保留只在结束/解散/全员离开时 `endCashTable` 统一结算**(不立即兑出)；`sit_back` 从 vacatedPlayers 带原筹码回空座；state 加 `vacatedUserIds` 供客户端显示「回到座位」。空房清理前若有 vacatedPlayers 走 endCashTable 防金币丢失。E2E：站起离座+筹码不兑→留座保座→带筹码回座→解散才结算 全通。
+- **语音模块(朋友开发,已合并)**：`git merge` 零冲突并入。按住 `#voice-btn` 录音→上传→房间内 10 秒可点击气泡播放，不进聊天历史；服务端 `voice_tmp/`(1h TTL)+ `music-metadata` 校验时长(15s)+限流。deploy npm install 会装依赖。
+- **菜单精简**：桌内菜单去掉「当前战绩」「牌谱回顾」(已由桌面左右边缘箭头直达)。
+- **加注条手机端仍不够顺(HTML 原生 range 限制)**：已去 backdrop-filter 模糊 + rAF 节流 + 拖动时暂停座位呼吸光/环形重绘 + contain；电脑顺、手机仍卡，用户决定**留到做 App 时再彻底解决**(换自定义指针拖动条)。
 - **已做(测试服)**：①**加注条手机灵敏**——`#betSlider` 改 `-webkit-appearance:none`+32px 大拇指块+`touch-action:none`（防页面滚动手势抢走拖动，即之前说的"HTML原因"），拖到最大=all-in（滑条 max=全下额，替代几乎没人用的 All-in 按钮）。②**加时选项可读+确认**——`.tier-btn` 提高对比度；`extendMatch` 改二次确认+提示（不再误触无反馈）。
 - **待做大改(按优先级, 需用户定序 + 决策)**：
   - **#5 牌谱UI重构（核心已上测试服，待验收）**：①**桌面左右边缘小箭头**(`.edge-arrow`，左=当前战绩 openStats、右=牌谱回顾 openHistory，body.in-room 才显示)——游戏内直达。②**牌谱列表**加底牌+公共牌小卡(`.hi-cards`)+净盈亏。③点列表→**牌谱详情** `openHandDetail`(`#hand-detail` 清爽 breakdown，参考截图3)：各家 头像+位置(handPositions 定 BTN/SB/BB, 2人=D/SB+BB)+底牌(自己/摊牌者亮·弃牌者盖背)+**各街动作徽章**(翻前/翻牌/转牌/河牌, 弃/过/跟/下/加 + 额)+本手净变化(endChips−startChips)+底池；顶部「▶回放」按钮转动画回放。④**回放全屏**(`.replay-box` 撑满、`#rp-table` flex:1)。数据字段核对通过(seats/actions/results/buttonUserId/community)。**待做**：每家牌型名(需服务端存 category 或客户端评估)；美化细调。
