@@ -97,6 +97,8 @@ Android / iOS / PC
 ## 🛡️ 防陌生人捣乱：列表只观战、下场需房间号（2026-07-18，测试服）
 - 大厅列表所有房间仍可见，但点进=**只观战**（不显示房号）；**下场入座必须用房主私发的房间号加入**。
 - 实现：`join_room({roomId, byCode})`——byCode=true(输房号) 才 `socket.playRoom=roomId`(下场资格)；列表点进(byCode 缺省)只 joinAsSpectator。`sit_down` 与 SNG 落座校验 `socket.playRoom===roomId`，否则「观战中」。房主创建即授权；站起回座/成员重进保留资格(vacatedPlayers/players 命中即授权)。SNG 从列表点进也只观战。客户端列表按钮改「👀 观战」、joinByCode 传 byCode、大厅加提示。E2E：房主可坐/观战者被拒/输房号可坐 通过。
+- **观战者不见房号**：`room_joined` 下发 `canPlay`；客户端 `iCanPlay=false` 时水印/比赛设置显示「👀 观战中」隐藏房号；点坐下 toast 提示需房号加入。
+- **退出不误删房间**：观众离开用 io 房间 `size` 判真空(房主未坐下不误删)；空房不立即关，`scheduleEmptyCleanup` 3 分钟宽限(可凭房号回来；join 清 timer；到点仍空才结算关)——退出≠立即解散。E2E 通过。
 
 ## 🗺️ 商业化体验路线图（2026-07-16 用户反馈，参考德扑之星）
 - **现金桌到点不打断牌局**：训练时长到点若正有牌局→`onTableTimeUp` 挂起 `game.pendingEnd`(不立即结算)、`match_ending_soon` 提醒(房主自动开比赛设置可加时)，本手结束(scheduleNextHand)后若仍 pendingEnd 才 `endCashTable`；`extendTable` 加时清 pendingEnd。局间到点则直接结算。（照搬 pendingLevelUp「涨盲等本手」模式。）

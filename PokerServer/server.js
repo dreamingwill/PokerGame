@@ -1192,6 +1192,13 @@ function genRoomId() {
     return id;
 }
 
+// 记住"有下场资格"的用户（房主/输过房号/坐过）：即使退到大厅当观众，列表仍显示「重新加入」
+function authorize(roomId, userId) {
+    const g = roomGames[roomId];
+    if (!g) return;
+    if (!g.authorized) g.authorized = new Set();
+    g.authorized.add(userId);
+}
 function roomSummary(roomId, userId) {
     const g = roomGames[roomId];
     return {
@@ -1209,7 +1216,10 @@ function roomSummary(roomId, userId) {
         bb:         g.config?.bb || 0,
         ante:       g.config?.ante || 0,
         minBuyIn:   g.config?.minBuyIn || 0,
-        isMember:   !!(userId && g.players.some(p => p.userId === userId))   // 我是否本房成员（可重进）
+        // 我是否本房成员/有下场资格（在座 / 站起 / 输过房号授权）→ 列表显示「重新加入」而非「观战」
+        isMember:   !!(userId && (g.players.some(p => p.userId === userId)
+                    || (g.vacatedPlayers || []).some(v => v.userId === userId)
+                    || (g.authorized && g.authorized.has(userId))))
     };
 }
 
@@ -1691,7 +1701,7 @@ io.on('connection', (socket) => {
             currentLevel: 0, levelStartTime: null, prizePool: 0, tournamentOver: false,
             statsHistory: []
         };
-        socket.playRoom = roomId;   // 房主有下场资格
+        socket.playRoom = roomId; authorize(roomId, user.id);   // 房主有下场资格
         if (!seatPlayer(roomId, socket, user)) { delete roomGames[roomId]; }
     });
 
@@ -1719,7 +1729,7 @@ io.on('connection', (socket) => {
             statsHistory: [], tableEndAt: null, extraMs: 0
         };
         // 现金桌：房主先以观众身份进桌，点空座位「坐下」再带入（坐下式入座）
-        socket.playRoom = roomId;   // 房主有下场资格（无需再输房号）
+        socket.playRoom = roomId; authorize(roomId, user.id);   // 房主有下场资格（无需再输房号）
         joinAsSpectator(roomId, socket);
     });
 
@@ -1730,9 +1740,9 @@ io.on('connection', (socket) => {
         clearTimeout(game.emptyCleanupTimer);   // 有人（回来/加入）→ 取消空房清理
 
         // 输房间号进入 = 授权可下场；列表点进(观战)不设此权限，只能看不能坐（防陌生人捣乱）
-        if (byCode) socket.playRoom = roomId;
+        if (byCode) { socket.playRoom = roomId; authorize(roomId, user.id); }
         // 原座上成员 / 站起围观者回来：本就有资格玩
-        if (game.players.some(p => p.userId === user.id) || (game.vacatedPlayers || []).some(v => v.userId === user.id)) socket.playRoom = roomId;
+        if (game.players.some(p => p.userId === user.id) || (game.vacatedPlayers || []).some(v => v.userId === user.id)) { socket.playRoom = roomId; authorize(roomId, user.id); }
 
         // 断线重连
         const existing = game.players.find(p => p.userId === user.id);
