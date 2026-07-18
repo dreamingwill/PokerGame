@@ -1397,6 +1397,27 @@ function endCashTable(roomId, reason) {
     broadcastRoomList();
 }
 
+// 空房宽限清理：房间变空（无任何 socket）后保留 EMPTY_GRACE_MS，期间可凭房号回来/朋友加入；
+// 到点仍空才真正关闭（有筹码则结算）。避免房主创建/退出后房间立即消失（退出≠解散）。
+const EMPTY_GRACE_MS = 180000;   // 3 分钟
+function scheduleEmptyCleanup(roomId) {
+    const game = roomGames[roomId];
+    if (!game) return;
+    clearTimeout(game.emptyCleanupTimer);
+    game.emptyCleanupTimer = setTimeout(() => {
+        const g = roomGames[roomId];
+        if (!g || g.tournamentOver) return;
+        const room = io.sockets.adapter.rooms.get(roomId);
+        if (room && room.size > 0) return;   // 有人回来了 → 不清理
+        const hasChips = (g.vacatedPlayers || []).some(v => (v.chips || 0) > 0) || g.players.some(p => (p.chips || 0) > 0);
+        if (hasChips) endCashTable(roomId, '房间空置已关闭');   // 有筹码：结算再关
+        else {
+            clearTimeout(g.levelTimer); clearTimeout(g.nextHandTimer); clearTimeout(g.runoutTimer);
+            clearTimeout(g.tableTimer); clearActionTimer(g); delete roomGames[roomId]; broadcastRoomList();
+        }
+    }, EMPTY_GRACE_MS);
+}
+
 // 一局结束后自动开下一局（SNG/现金桌进行中，无需重新准备）
 // 注意：总是排一次定时清理（标记坐出/兑出/生效补码），即使人数不足也要让坐出状态落地
 function scheduleNextHand(roomId) {
@@ -1706,6 +1727,7 @@ io.on('connection', (socket) => {
     socket.on('join_room', ({ roomId, buyInChips, byCode }) => {
         const game = roomGames[roomId];
         if (!game) { socket.emit('server_msg', '⚠️ 房间不存在或已结束'); socket.emit('room_list', listRooms(user.id)); return; }
+        clearTimeout(game.emptyCleanupTimer);   // 有人（回来/加入）→ 取消空房清理
 
         // 输房间号进入 = 授权可下场；列表点进(观战)不设此权限，只能看不能坐（防陌生人捣乱）
         if (byCode) socket.playRoom = roomId;
@@ -1869,7 +1891,7 @@ io.on('connection', (socket) => {
                     // 全员离桌(无人在座)且无观众 → 直接结算收尾，避免空房悬挂持有筹码
                     const anyActive = game.players.some(pl => !pl.standing && !pl.away);
                     if (!anyActive && listSpectators(roomId).length === 0) {
-                        endCashTable(roomId, '全员离开');
+                        scheduleEmptyCleanup(roomId);   // 全员离开：空房保留 3 分钟再结算关闭（退出≠立即解散）
                     } else if (midHand) {
                         if (game.actionOnIdx === idx) { clearActionTimer(game); afterAction(roomId); }
                         else if (isBettingRoundComplete(game)) advanceStage(roomId);
@@ -1908,14 +1930,12 @@ io.on('connection', (socket) => {
             } else {
                 // 观众离开（现金桌未入座）：退出 socket.io 房间并刷新观众列表
                 socket.leave(roomId);
-                if (game.players.length === 0 && listSpectators(roomId).length <= 1) {
-                    // 若还有站起围观者的筹码没结算，走 endCashTable 结算再关房，避免筹码/金币丢失
-                    if ((game.vacatedPlayers || []).length) { endCashTable(roomId, '全员离开'); }
-                    else {
-                        clearTimeout(game.levelTimer); clearTimeout(game.nextHandTimer); clearTimeout(game.runoutTimer);
-                        clearActionTimer(game); delete roomGames[roomId];
-                    }
-                } else broadcastState(roomId);
+                // 仅当房间真的空了（无任何 socket，含未坐下的房主观众）才关房——
+                // 否则房主创建后未落座、被路人观战一下再走会误删房间。
+                const room = io.sockets.adapter.rooms.get(roomId);
+                const trulyEmpty = game.players.length === 0 && (!room || room.size === 0);
+                if (trulyEmpty) scheduleEmptyCleanup(roomId);   // 空房保留 3 分钟再关，可凭房号回来
+                else { broadcastState(roomId); broadcastRoomList(); }
             }
         }
         socket.currentRoom = null;
