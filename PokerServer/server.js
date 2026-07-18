@@ -1533,7 +1533,7 @@ function joinAsSpectator(roomId, socket) {
     lobbySockets.delete(socket.id);
     socket.join(roomId);
     socket.currentRoom = roomId;
-    socket.emit('room_joined', { roomId });
+    socket.emit('room_joined', { roomId, canPlay: socket.playRoom === roomId });
     broadcastState(roomId);
     broadcastRoomList();
 }
@@ -1594,7 +1594,7 @@ function seatPlayer(roomId, socket, user, buyInChips, seat) {
         game.players.splice(ins, 0, newP);
         if (ins <= game.buttonIdx) game.buttonIdx++;
     }
-    socket.emit('room_joined', { roomId });
+    socket.emit('room_joined', { roomId, canPlay: socket.playRoom === roomId });
     socket.to(roomId).emit('server_msg', `🪑 ${user.username} 入座 ${seat + 1} 号位`);
     broadcastState(roomId);
     broadcastRoomList();
@@ -1726,7 +1726,7 @@ io.on('connection', (socket) => {
             lobbySockets.delete(socket.id);
             socket.join(roomId);
             socket.currentRoom = roomId;
-            socket.emit('room_joined', { roomId });
+            socket.emit('room_joined', { roomId, canPlay: socket.playRoom === roomId });
             socket.emit('server_msg', '🔄 重新连接成功');
             if (game.holeCards[user.id]) {
                 socket.emit('hole_cards', game.holeCards[user.id].map(c => ({ suit: c.suit, rank: c.rank })));

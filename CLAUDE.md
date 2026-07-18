@@ -94,6 +94,10 @@ Android / iOS / PC
 - **分池双赢家高亮**：旧客户端底牌高亮只用单个 `winnerId` → 分池时第二赢家底牌被当输家变灰。服务端 showdown 改发 `bestByWinner`(每个赢家各自最强5张)；客户端 `holeOpts` 按赢家各自高亮、`winnerCommunitySet()` 取所有赢家公共牌并集高亮。
 - **战绩连续（训练赛口径，已上香港）**：现金桌「退出房间」不再立即兑出——改为**站起保留座位+筹码**（复用 standing 机制），只在**本局结束/解散/全员离开**时统一 `endCashTable` 结算金币；离开后回大厅可「重新进入」(`join_room` 重连分支清 standing/reserved、有筹码回座、局间续局)接上原座位/带入/盈亏（战绩不清零）。leave_room 里全员离桌(无 active 玩家+无观众)自动 `endCashTable` 收尾防空房悬挂。修正客户端 leaveRoom/standUp 文案(不兑出、结束才结算)。E2E 验证：买入扣550→退出金币不变+座位筹码留→重进带入5000不清零+回座→解散才兑出(9288→9796)，全通。
 
+## 🛡️ 防陌生人捣乱：列表只观战、下场需房间号（2026-07-18，测试服）
+- 大厅列表所有房间仍可见，但点进=**只观战**（不显示房号）；**下场入座必须用房主私发的房间号加入**。
+- 实现：`join_room({roomId, byCode})`——byCode=true(输房号) 才 `socket.playRoom=roomId`(下场资格)；列表点进(byCode 缺省)只 joinAsSpectator。`sit_down` 与 SNG 落座校验 `socket.playRoom===roomId`，否则「观战中」。房主创建即授权；站起回座/成员重进保留资格(vacatedPlayers/players 命中即授权)。SNG 从列表点进也只观战。客户端列表按钮改「👀 观战」、joinByCode 传 byCode、大厅加提示。E2E：房主可坐/观战者被拒/输房号可坐 通过。
+
 ## 🗺️ 商业化体验路线图（2026-07-16 用户反馈，参考德扑之星）
 - **现金桌到点不打断牌局**：训练时长到点若正有牌局→`onTableTimeUp` 挂起 `game.pendingEnd`(不立即结算)、`match_ending_soon` 提醒(房主自动开比赛设置可加时)，本手结束(scheduleNextHand)后若仍 pendingEnd 才 `endCashTable`；`extendTable` 加时清 pendingEnd。局间到点则直接结算。（照搬 pendingLevelUp「涨盲等本手」模式。）
 - **聊天常用语顶部遮挡修复**：面板 max-height 56vh 装不下 chat-list+12条→展开常用语时隐藏消息列表腾空间；toggleChat 打开时复位。
