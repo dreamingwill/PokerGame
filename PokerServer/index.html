@@ -1732,6 +1732,7 @@ function connectSocket(token) {
     });
     socket.on('player_stats', ({ userId, stats }) => renderPlayerStats(userId, stats));
     socket.on('button_draw', ({ draws, winnerId }) => showButtonDraw(draws, winnerId));
+    socket.on('table_notice', ({ text }) => toast(text, 3500));   // 牌桌下方一行提示（如"谁想看转牌"）
     socket.on('match_ending_soon', () => {
         const isOwner = lastState && lastState.ownerUserId === myUserId;
         if (isOwner) {

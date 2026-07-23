@@ -2090,8 +2090,8 @@ io.on('connection', (socket) => {
         if (n >= 5) return;                       // 已到河牌（含真摊牌），无可发
         const count = n === 0 ? 3 : 1;            // 0→翻牌3张，3→转牌1张，4→河牌1张
         const streetName = n === 0 ? '翻牌' : (n === 3 ? '转牌' : '河牌');
-        // 公屏广播谁想看（走弹幕，全房可见）
-        io.in(roomId).emit('chat_broadcast', { userId: user.id, username: user.username, text: `🐰 想看${streetName}`, ts: Date.now() });
+        // 牌桌下方显示一行字：谁想看（不走弹幕）
+        io.in(roomId).emit('table_notice', { text: `🐰 ${user.username} 想看${streetName}` });
         const dealt = dealCommunity(game, count);
         io.in(roomId).emit('server_msg', `🐰 看后续牌：${dealt.map(c => c.toString()).join(' ')}`);
         scheduleNextHand(roomId);                 // 重置局间倒计时，给看牌时间
