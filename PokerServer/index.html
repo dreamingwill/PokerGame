@@ -346,9 +346,9 @@
             from { transform: translateY(0) scale(1); box-shadow: 0 2px 5px rgba(0,0,0,0.35); }
             to   { transform: translateY(-12px) scale(1.06); box-shadow: 0 0 16px 3px rgba(244,211,94,0.9); }
         }
-        .card.dim { filter: grayscale(1) brightness(0.55); opacity: 0.5; }
+        .card.dim { filter: brightness(0.72); opacity: 0.6; }   /* 只压暗，保留四色，仍能看清点数花色 */
         .card.dim.reveal-anim { animation: dimOut 0.5s ease-out backwards; }
-        @keyframes dimOut { from { filter: none; opacity: 1; } to { filter: grayscale(1) brightness(0.55); opacity: 0.5; } }
+        @keyframes dimOut { from { filter: none; opacity: 1; } to { filter: brightness(0.72); opacity: 0.6; } }
         .hand-type { font-size: 13px; font-weight: bold; color: #f4d35e; margin: 2px 0;
             text-shadow: 0 0 8px rgba(244,211,94,0.6); animation: dealIn 0.4s ease-out backwards; }
         .my-hand-type { font-size: 12px; font-weight: bold; color: #06d6a0; margin: 2px 0; }
@@ -2122,7 +2122,11 @@ function renderStats(st) {
         const tag = (p.userId === myUserId ? ' (你)' : '') + (p.standing ? ' 🧍' : p.reserved ? ' 💺' : p.away ? ' 📴' : p.sittingOut ? ' 💤' : '');
         return { name: p.username, buyIn: p.buyIn, hands: p.handsPlayed, net: (p.chips || 0) - (p.buyIn || 0), dim: inactive, tag };
     });
-    (st.statsHistory || []).filter(h => !curIds.has(h.userId)).forEach(h =>
+    // 站起围观者（已离座但带入过）：灰显保留战绩，不清空
+    (st.vacated || []).filter(v => !curIds.has(v.userId)).forEach(v =>
+        rows.push({ name: v.username, buyIn: v.buyIn, hands: v.handsPlayed, net: v.net || 0, dim: true, tag: ' 🧍围观' }));
+    const shownIds = new Set([...curIds, ...(st.vacated || []).map(v => v.userId)]);
+    (st.statsHistory || []).filter(h => !shownIds.has(h.userId)).forEach(h =>
         rows.push({ name: h.username, buyIn: h.buyIn, hands: h.handsPlayed, net: h.net || 0, dim: true, tag: ' 🚪已离开' }));
     rows.sort((a, b) => b.net - a.net);
     body.innerHTML = rows.map(r => row(r.name, r.buyIn, r.hands, r.net, r.dim, r.tag)).join('')

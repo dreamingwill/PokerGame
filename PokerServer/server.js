@@ -677,6 +677,8 @@ function broadcastState(roomId) {
         sidePots:   livePots(game),
         spectators: listSpectators(roomId),
         vacatedUserIds: (game.vacatedPlayers || []).map(v => v.userId),   // 站起围观者（可带原筹码回座）
+        // 站起围观者的战绩（战绩面板灰显保留，别让带入过又离座的人从战绩里消失）
+        vacated: (game.vacatedPlayers || []).map(v => ({ userId: v.userId, username: v.username, buyIn: v.buyIn || 0, handsPlayed: v.handsPlayed || 0, net: (v.chips || 0) - (v.buyIn || 0) })),
         statsHistory: game.statsHistory || [],       // 已离开/淘汰玩家（战绩面板灰显）
         tableEndAt: game.tableEndAt || null,         // 现金桌训练结束时间戳
         pendingEnd: !!game.pendingEnd,               // 训练时长已到、本手结束后结算（房主可加时）
@@ -2087,6 +2089,9 @@ io.on('connection', (socket) => {
         const n = game.communityCards.length;
         if (n >= 5) return;                       // 已到河牌（含真摊牌），无可发
         const count = n === 0 ? 3 : 1;            // 0→翻牌3张，3→转牌1张，4→河牌1张
+        const streetName = n === 0 ? '翻牌' : (n === 3 ? '转牌' : '河牌');
+        // 公屏广播谁想看（走弹幕，全房可见）
+        io.in(roomId).emit('chat_broadcast', { userId: user.id, username: user.username, text: `🐰 想看${streetName}`, ts: Date.now() });
         const dealt = dealCommunity(game, count);
         io.in(roomId).emit('server_msg', `🐰 看后续牌：${dealt.map(c => c.toString()).join(' ')}`);
         scheduleNextHand(roomId);                 // 重置局间倒计时，给看牌时间
